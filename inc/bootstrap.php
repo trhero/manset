@@ -7,7 +7,7 @@
 
 if (defined('MANSET_BOOTSTRAPPED')) { return; }
 define('MANSET_BOOTSTRAPPED', true);
-define('MANSET_VERSION', '1.3.0');
+define('MANSET_VERSION', '1.4.0');
 define('ROOT_DIR', dirname(__DIR__));
 define('INC_DIR', ROOT_DIR . '/inc');
 define('DB_DIR', ROOT_DIR . '/db');
@@ -313,6 +313,11 @@ function setting($key, $default = '') {
 }
 /** Ayar yazar (upsert) ve bellek kopyasını tazeler. */
 function setting_set($key, $value) {
+    // DEMO KİPİ: kurulumu bozan ya da sınırları aşan anahtarlar yazılamaz.
+    // Sessizce yok sayılır — bir demo ziyaretçisine hata döndürmek yerine
+    // değişikliğin etkisiz kalması yeterlidir ve akışı bozmaz.
+    if (function_exists('demo_setting_locked') && demo_setting_locked($key)) { return; }
+
     // Sır niteliğindeki anahtarlar DİSKE şifreli yazılır (yukarıdaki açıklama).
     if (setting_is_secret($key)) { $value = setting_secret_encode($value); }
     $exists = qv('SELECT 1 FROM settings WHERE skey = :k', [':k' => $key]);
@@ -923,6 +928,9 @@ function manset_feature_modules() {
         'revisions',   // sürüm geçmişi, otomatik kayıt, düzenleme kilidi
         'comments',    // yorum yanıtları, kara liste, moderasyon
         'embed',       // oEmbed gömme (YouTube/Vimeo/X/Instagram)
+        // 1.4
+        'rss_katalog', // örnek RSS kaynak kataloğu (öneri listesi, otomatik eklenmez)
+        'demo',        // demo kipi kısıtları (config.php: demo_mode)
     ];
 }
 
@@ -1125,6 +1133,21 @@ function current_user_if_session() {
  */
 function can($user, $permission) {
     if (!$user) { return false; }
+
+    // DEMO KİPİ — İZİN KATMANINDA (1.4).
+    //
+    // Demo kısıtlarını uç noktası ADIYLA saymak kırılgandır: ölçüm sırasında
+    // kara listeye yazdığım adların altısı gerçekte YOKTU (`ai.run`,
+    // `users.save`, `theme.save_css`, `payment.save` …) ve o girişler hiçbir
+    // şeyi engellemiyordu — yalnız engellemiş gibi görünüyordu.
+    //
+    // İzin katmanı bu hatayı yapılamaz kılar: her API ucu, her panel sayfası ve
+    // her form zaten buradan geçer. Bir izin kapatıldığında ona bağlı HER yol
+    // kapanır — ucun adı ne olursa olsun, ileride hangi uç eklenirse eklensin.
+    if (function_exists('demo_denied_permission') && demo_denied_permission($permission)) {
+        return false;
+    }
+
     // Faz 7: genişletilmiş rol sistemi kuruluysa karar oraya devredilir.
     // inc/roles.php yoksa aşağıdaki v1 haritası geçerli kalır (geriye dönük uyum).
     if (function_exists('roles_can')) { return roles_can($user, $permission); }

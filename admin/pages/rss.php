@@ -68,6 +68,9 @@ $simdiZaman = now();
   <h1>RSS Kaynakları</h1>
   <div class="dugme-grup">
     <a class="dugme" href="<?= esc(admin_url('rss', ['sekme' => 'havuz'])) ?>">Havuza git →</a>
+    <?php if (function_exists('rss_katalog')): ?>
+      <button type="button" class="dugme" id="rssKatalogAc">Örnek kaynaklardan ekle</button>
+    <?php endif; ?>
     <button type="button" class="dugme birincil" id="rssYeniKaynak">+ Yeni kaynak</button>
   </div>
 </div>
@@ -560,3 +563,89 @@ $simdiZaman = now();
   }
 })();
 </script>
+
+<?php if (function_exists('rss_katalog')): ?>
+<script>
+/* ------------------------------------------------ örnek kaynak kataloğu (1.4) */
+M.hazir(function () {
+  var btn = M.qs('#rssKatalogAc');
+  if (!btn) { return; }
+
+  function satirlariCiz(items) {
+    /* Kategoriye göre gruplanır: yayıncı "hangi kategoriye ne geliyor" sorusunu
+       tek bakışta görmeli. Zaten ekli olanlar işaretli ve seçilemez. */
+    var gruplar = {};
+    items.forEach(function (it) { (gruplar[it.kategori] = gruplar[it.kategori] || []).push(it); });
+    var h = '';
+    Object.keys(gruplar).sort().forEach(function (kat) {
+      h += '<div class="kart-baslik" style="margin-top:14px">' + M.esc(kat) + '</div>';
+      h += '<div class="tablo-sarma"><table class="tablo"><tbody>';
+      gruplar[kat].forEach(function (it) {
+        var kilit = it.ekli ? ' disabled' : '';
+        var etiket = it.ekli ? ' <span class="rozet notr">zaten ekli</span>' : '';
+        h += '<tr><td class="dar"><label class="anahtar" style="margin:0">'
+          +  '<input type="checkbox" class="katalogSec" value="' + M.esc(it.url) + '"' + kilit + '>'
+          +  '<span class="kaydirak"></span></label></td>'
+          +  '<td><strong>' + M.esc(it.ad) + '</strong>' + etiket
+          +  '<span class="satir-alt mini soluk">' + M.esc(it.url) + '</span></td>'
+          +  '<td class="dar mini soluk">' + it.aralik + ' dk</td></tr>';
+      });
+      h += '</tbody></table></div>';
+    });
+    return h;
+  }
+
+  btn.addEventListener('click', function () {
+    M.api('rss.katalog', { do: 'liste' }).then(function (r) {
+      if (!r || !r.ok) { M.sonuc(r); return; }
+      var govde =
+        '<div class="uyari warn"><strong>Telif uyarısı.</strong> Başka bir yayın kuruluşunun '
+      + 'beslemesinden gelen metni tam olarak yayımlamak telif hakkı meselesidir. RSS'in açık '
+      + 'olması, içeriğin serbestçe çoğaltılabileceği anlamına gelmez. Yaygın kullanım kısa '
+      + 'özet + kaynak adı + özgün habere bağlantıdır; kalıcı ve ticari kullanım için kaynak '
+      + 'kuruluşla anlaşın. <strong>Sorumluluk yayıncıya aittir.</strong></div>'
+      + '<p class="kucuk soluk">Seçtikleriniz <strong>otomatik yayın kapalı</strong> ve '
+      + '<strong>yapay zekâ yeniden yazma kapalı</strong> olarak eklenir — hiçbir şey siz '
+      + 'okumadan yayına çıkmaz. Adresler eklenmeden önce denendi, ama beslemeler zamanla '
+      + 'taşınabilir.</p>'
+      + '<div class="dugme-grup bosluk-alt">'
+      + '<button type="button" class="dugme kucuk" id="katalogHepsi">Tümünü seç</button>'
+      + '<button type="button" class="dugme kucuk" id="katalogHicbiri">Temizle</button>'
+      + '<span class="mini soluk" id="katalogSayac"></span></div>'
+      + satirlariCiz(r.items || [])
+      + '<div class="dugme-grup bosluk-ust"><button type="button" class="dugme birincil" id="katalogEkle">Seçilenleri ekle</button></div>';
+
+      M.modal.ac('Örnek RSS kaynakları (' + (r.toplam || 0) + ')', govde, '760px');
+
+      function sayacGuncelle() {
+        var n = M.qsa('.katalogSec:checked').length;
+        var el = M.qs('#katalogSayac');
+        if (el) { el.textContent = n + ' kaynak seçildi'; }
+      }
+      M.qsa('.katalogSec').forEach(function (c) { c.addEventListener('change', sayacGuncelle); });
+      var hepsi = M.qs('#katalogHepsi');
+      if (hepsi) { hepsi.addEventListener('click', function () {
+        M.qsa('.katalogSec').forEach(function (c) { if (!c.disabled) { c.checked = true; } });
+        sayacGuncelle();
+      }); }
+      var hicbiri = M.qs('#katalogHicbiri');
+      if (hicbiri) { hicbiri.addEventListener('click', function () {
+        M.qsa('.katalogSec').forEach(function (c) { c.checked = false; });
+        sayacGuncelle();
+      }); }
+      var ekle = M.qs('#katalogEkle');
+      if (ekle) { ekle.addEventListener('click', function () {
+        var urls = M.qsa('.katalogSec:checked').map(function (c) { return c.value; });
+        if (!urls.length) { M.uyar('Önce kaynak seçin.'); return; }
+        ekle.disabled = true;
+        M.api('rss.katalog', { do: 'ekle', urls: urls }).then(function (r2) {
+          ekle.disabled = false;
+          if (M.sonuc(r2)) { setTimeout(function () { location.reload(); }, 800); }
+        });
+      }); }
+      sayacGuncelle();
+    });
+  });
+});
+</script>
+<?php endif; ?>

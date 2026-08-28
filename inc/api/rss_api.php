@@ -348,3 +348,59 @@ api_register('rss.stats', function () {
     $s = rss_stats();
     return $s + ['message' => 'Sayaçlar güncellendi.'];
 }, rss_api_opts());
+
+// ---------------------------------------------------------------- rss.katalog
+/**
+ * Örnek kaynak kataloğunu döndürür ve seçilenleri ekler.
+ *
+ * İstek : {do:'liste'} → katalog + hangileri zaten ekli
+ *         {do:'ekle', urls:[...]} → seçilenleri ekler
+ *
+ * Katalog dışı bir adres bu uçtan EKLENEMEZ (rss_katalog_ekle() denetler):
+ * aksi halde bu uç, keyfi bir adresi kaynak yapmanın kısa yolu olurdu ve
+ * `rss.save`'deki doğrulamaları atlardı.
+ */
+api_register('rss.katalog', function () {
+    if (!function_exists('rss_katalog')) {
+        json_err('Örnek kaynak kataloğu bu kurulumda yok.', 503);
+    }
+    $d  = json_body();
+    $do = (string)arr($d, 'do', 'liste');
+
+    // Zaten ekli adresler (tekrar eklemeyi engellemek ve arayüzde göstermek için)
+    $ekli = [];
+    foreach (qa('SELECT url FROM rss_sources') as $r) { $ekli[strtolower((string)$r['url'])] = true; }
+
+    if ($do === 'ekle') {
+        $urls = arr($d, 'urls', []);
+        if (!is_array($urls) || !$urls) { json_err('Kaynak seçilmedi.', 400); }
+        // ÜST SINIR: tek istekte 50'den fazla kaynak eklemek, ilk cron turunda
+        // onlarca dış siteye aynı anda gitmek demektir.
+        if (count($urls) > 50) { json_err('Tek seferde en çok 50 kaynak eklenebilir.', 400); }
+
+        $eklendi = 0; $atlanan = 0; $hatalar = [];
+        foreach ($urls as $u) {
+            $r = rss_katalog_ekle((string)$u);
+            if (!empty($r['ok'])) { $eklendi++; }
+            else { $atlanan++; if (count($hatalar) < 5) { $hatalar[] = (string)$r['error']; } }
+        }
+        if (function_exists('cache_flush')) { cache_flush(); }
+        return [
+            'eklendi' => $eklendi, 'atlanan' => $atlanan, 'hatalar' => $hatalar,
+            'message' => $eklendi . ' kaynak eklendi'
+                       . ($atlanan ? ', ' . $atlanan . ' atlandı (zaten ekli ya da geçersiz)' : '') . '.',
+        ];
+    }
+
+    $liste = [];
+    foreach (rss_katalog() as $k) {
+        $liste[] = [
+            'ad'       => (string)$k[0],
+            'url'      => (string)$k[1],
+            'kategori' => (string)$k[2],
+            'aralik'   => (int)$k[3],
+            'ekli'     => isset($ekli[strtolower((string)$k[1])]),
+        ];
+    }
+    return ['items' => $liste, 'toplam' => count($liste)];
+}, ['perm' => 'rss.manage', 'methods' => ['POST']]);

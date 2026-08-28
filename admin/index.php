@@ -269,6 +269,20 @@ if (!admin_page_exists($page)) {
 // izin hiç sorulmuyordu. Artık izin MENÜDEN BAĞIMSIZ haritadan okunuyor ve
 // haritada olmayan sayfaya erişim YOK. Yeni sayfa ekleyen, haritaya da
 // eklemek zorunda: unutursa sayfa açılmaz — sessizce korumasız kalmaz.
+// DEMO KAPISI — panel formları API'den GEÇMEZ, bu yüzden ikinci bir kapı gerekir.
+// Yalnız YAZMA (POST) engellenir: sayfaların kendisi gezilebilir kalmalı ki
+// demo ziyaretçisi neyin var olduğunu görebilsin.
+if (function_exists('demo_mode') && demo_mode()
+    && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    $mansetDemoSayfa = demo_blocked_pages();
+    if (isset($mansetDemoSayfa[$page])) {
+        flash('warn', 'Demo kurulumunda bu işlem kapalıdır. ' . $mansetDemoSayfa[$page]);
+        header('Location: ' . admin_url($page), true, 302);
+        ob_end_flush();
+        exit;
+    }
+}
+
 $sayfaIzni = admin_page_permission($page, $nav);
 if ($sayfaIzni === null || !can($adminUser, $sayfaIzni)) {
     http_response_code(403);
@@ -385,6 +399,7 @@ function admin_layout($title, $content, $activePage, $user, array $nav) {
   </nav>
 
   <main class="icerik" id="anaicerik">
+    <?= function_exists('demo_banner_html') ? demo_banner_html() : '' ?>
     <?= admin_flash_render() ?>
     <?= $content ?>
   </main>

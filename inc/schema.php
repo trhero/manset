@@ -390,10 +390,34 @@ function schema_seed($adminName, $adminEmail, $adminPass, $siteTitle = 'Manşet'
     }
 
     // Kategoriler
+    // VARSAYILAN KATEGORILER (1.4'te genisletildi).
+    //
+    // Uc kategori bir haber sitesi icin fazla dardi: yayinci kurulumdan hemen
+    // sonra elle kategori acmak zorunda kaliyordu ve RSS ornek katalogunun
+    // onerdigi kategorilerin cogu yoktu. Liste, ornek besleme katalogundaki
+    // (inc/rss_katalog.php) kategori adlariyla BIREBIR eslesir; eslesmezse
+    // "kaynagi ekle" akisi kategoriyi bulamaz ve bos birakirdi.
+    //
+    // Hepsi menude degildir: `in_menu` 0 olanlar var ama menuyu sismez.
+    // Yayinci istemedigini panelden siler; sonradan eklemek acmaktan zordur.
     $cats = [
-        ['Gündem', '#c0392b', 1],
-        ['Ekonomi', '#27632a', 2],
-        ['Spor', '#1f4e79', 3],
+        //  ad                 renk        sira  menude
+        ['Gündem',            '#c0392b',   1,  1],
+        ['Ekonomi',           '#27632a',   2,  1],
+        ['Spor',              '#1f4e79',   3,  1],
+        ['Dünya',             '#6b21a8',   4,  1],
+        ['Teknoloji',         '#0e7490',   5,  1],
+        ['Kültür Sanat',      '#9d174d',   6,  1],
+        ['Yaşam',             '#b45309',   7,  1],
+        ['Sağlık',            '#047857',   8,  1],
+        ['Eğitim',            '#1d4ed8',   9,  0],
+        ['Siyaset',           '#7c2d12',  10,  0],
+        ['Yerel',             '#334155',  11,  0],
+        ['Magazin',           '#be185d',  12,  0],
+        ['Otomobil',          '#374151',  13,  0],
+        ['Çevre',             '#15803d',  14,  0],
+        ['Bilim',             '#4338ca',  15,  0],
+        ['Asayiş',            '#991b1b',  16,  0],
     ];
     $catIds = [];
     foreach ($cats as $i => $c) {
@@ -402,7 +426,7 @@ function schema_seed($adminName, $adminEmail, $adminPass, $siteTitle = 'Manşet'
         if (!$id) {
             $id = db_insert('categories', [
                 'name' => $c[0], 'slug' => $slug, 'sort' => $c[2],
-                'color' => $c[1], 'in_menu' => 1, 'active' => 1,
+                'color' => $c[1], 'in_menu' => isset($c[3]) ? (int)$c[3] : 1, 'active' => 1,
             ]);
         }
         $catIds[] = $id;

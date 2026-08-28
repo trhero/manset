@@ -4,6 +4,55 @@ Bu proje [Anlamsal Sürümleme](https://semver.org/lang/tr/) kurallarını izler
 
 ## [Yayımlanmadı]
 
+## [1.4.0]
+
+### Yapay zekâ sağlayıcıları
+- Sağlayıcılar artık bir **katalog**: yenisini eklemek tek satır.
+  **OpenRouter**, OpenAI, Google Gemini, Groq, DeepSeek, Mistral ve
+  **Ollama** (kendi sunucunuz, ücretsiz) eklendi; Anthropic ve serbest
+  "OpenAI uyumlu" seçeneği duruyor.
+- OpenRouter'a atıf başlıkları gönderilir; Ollama anahtar istemez.
+- **Düzeltme:** API beyaz listesi iki sağlayıcı adını elle tutuyordu. Yeni bir
+  sağlayıcı seçmek kaydedilir gibi görünüp **sessizce Anthropic'e düşüyordu** —
+  yayıncı OpenRouter seçtiğini sanıp Anthropic'e istek atardı.
+
+### Kategoriler
+- Varsayılan kategori sayısı 3'ten **16'ya** çıktı; sekizi menüde, kalanı hazır.
+  Adlar RSS kataloğuyla birebir eşleşir.
+
+### Örnek RSS kaynakları
+- **47 hazır kaynak**, kategorilere eşlenmiş olarak. Panel → RSS Kaynakları →
+  "Örnek kaynaklardan ekle".
+- Adresler tek tek **denendi**: 64 adayın 50'si yanıt verdi, yanıt vermeyen
+  14'ü listeye alınmadı.
+- Eklenenler **otomatik yayın kapalı** ve **YZ yeniden yazma kapalı** başlar.
+  Katalog dışı adres bu uçtan eklenemez. Arayüzde telif uyarısı vardır.
+
+### Demo kipi
+- `config.php` içinde `demo_mode => true` ile herkese açık tanıtım kurulumu.
+- Kapatılanlar: yapay zekâ çağrıları, e-posta gönderimi, yedek işlemleri,
+  kullanıcı ve rol yönetimi, ham HTML reklam, özel CSS, ödeme ayarları, dış RSS
+  kaynağı ekleme. Veriler zamanlı olarak temiz bir kopyadan sıfırlanır.
+- Kısıt **izin katmanındadır** (`can()`), uç adı listesinde değil: her API ucu,
+  her panel sayfası ve her form oradan geçer.
+- `tools/demo-hazirla.php` kurulmuş, veri dolu bir demo paketi üretir.
+
+### Düzeltmeler
+- Kurulum kontrol listesine **HTTPS kök sertifika** maddesi. Paket tanımlı
+  değilse `https://` ile yapılan HER dış istek başarısız olur (RSS, YZ,
+  IndexNow, gömme, uzak yedek) ve hata "adres yanıt vermedi" gibi görünür.
+- Kontrol listesine "ilk cron turunu bekleyenler" maddesi: etiket bulutu ve
+  görsel varyantları cron çalışana kadar eksik görünür — hata değil, ama
+  söylenmesi gerekir.
+- Panel kartlarındaki tablo dar sütunda taşıyordu (318px kartta 673px tablo);
+  açıklama metni sarmalanmıyordu.
+
+### Test altyapısı
+- `probe demo_gate`: demo kısıtlarında **hayali uç adı** ve kapsanmamış riskli
+  uç arar. İlk koşuda kara listedeki altı adın gerçekte var olmadığını ve iki
+  gerçek yetki yükseltme yolunun açık kaldığını buldu.
+
+
 ## [1.3.0] — "Haber odası"
 
 1.2 geliri ve görünürlüğü getirmişti; 1.3 **haberi üreten insanların gününü**

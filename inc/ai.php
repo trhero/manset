@@ -27,17 +27,134 @@ if (!defined('AI_MONTHLY_CALLS_DEFAULT')) { define('AI_MONTHLY_CALLS_DEFAULT', 1
 
 // ============================================================ yapılandırma
 
+/**
+ * SAĞLAYICI KATALOĞU
+ * ---------------------------------------------------------------------------
+ * Her sağlayıcı iki şeyle tanımlanır: konuştuğu PROTOKOL ve varsayılan ADRES.
+ * Protokol yalnız ikidir — `anthropic` (Messages API) ve `openai`
+ * (/chat/completions). Piyasadaki sağlayıcıların neredeyse tamamı ikincisini
+ * konuşur; aralarındaki fark taban adres, model adlandırması ve birkaç başlıktır.
+ *
+ * Bu yüzden yeni bir sağlayıcı eklemek TEK SATIRDIR. `openai_uyumlu` seçeneği
+ * de kalır: katalogda olmayan bir uç için yayıncı adresi kendi yazar.
+ *
+ * MODEL ADLARI ESKİR. Buradaki değerler yalnız makul birer BAŞLANGIÇ; sağlayıcı
+ * model listesini değiştirdiğinde panelde elle güncellenir. Bu yüzden model
+ * alanı serbest metindir, açılır liste değil — kilitli bir liste, sağlayıcı yeni
+ * model çıkardığında yazılımı kullanılamaz hale getirirdi.
+ */
+function ai_providers() {
+    return [
+        'anthropic' => [
+            'ad'       => 'Anthropic (Claude)',
+            'protokol' => 'anthropic',
+            'base'     => 'https://api.anthropic.com',
+            'model'    => 'claude-sonnet-5',
+            'not'      => 'Doğrudan Anthropic hesabı.',
+            'belge'    => 'https://docs.anthropic.com/',
+        ],
+        'openrouter' => [
+            'ad'       => 'OpenRouter',
+            'protokol' => 'openai',
+            'base'     => 'https://openrouter.ai/api/v1',
+            'model'    => 'anthropic/claude-sonnet-latest',
+            'not'      => 'Tek anahtarla onlarca sağlayıcıya erişir. Model adı '
+                        . '`saglayici/model` biçimindedir. Tam liste: openrouter.ai/models',
+            'belge'    => 'https://openrouter.ai/docs',
+        ],
+        'openai' => [
+            'ad'       => 'OpenAI',
+            'protokol' => 'openai',
+            'base'     => 'https://api.openai.com/v1',
+            'model'    => 'gpt-4o-mini',
+            'not'      => 'Doğrudan OpenAI hesabı.',
+            'belge'    => 'https://platform.openai.com/docs',
+        ],
+        'google' => [
+            'ad'       => 'Google Gemini',
+            'protokol' => 'openai',
+            'base'     => 'https://generativelanguage.googleapis.com/v1beta/openai',
+            'model'    => 'gemini-2.0-flash',
+            'not'      => 'Gemini icin OpenAI uyumlu uc kullanilir.',
+            'belge'    => 'https://ai.google.dev/gemini-api/docs/openai',
+        ],
+        'groq' => [
+            'ad'       => 'Groq',
+            'protokol' => 'openai',
+            'base'     => 'https://api.groq.com/openai/v1',
+            'model'    => 'llama-3.3-70b-versatile',
+            'not'      => 'Açık ağırlıklı modelleri çok hızlı çalıştırır.',
+            'belge'    => 'https://console.groq.com/docs',
+        ],
+        'deepseek' => [
+            'ad'       => 'DeepSeek',
+            'protokol' => 'openai',
+            'base'     => 'https://api.deepseek.com',
+            'model'    => 'deepseek-chat',
+            'not'      => 'Düşük maliyetli seçenek.',
+            'belge'    => 'https://api-docs.deepseek.com/',
+        ],
+        'mistral' => [
+            'ad'       => 'Mistral',
+            'protokol' => 'openai',
+            'base'     => 'https://api.mistral.ai/v1',
+            'model'    => 'mistral-small-latest',
+            'not'      => 'Avrupa merkezli sağlayıcı.',
+            'belge'    => 'https://docs.mistral.ai/',
+        ],
+        'ollama' => [
+            'ad'          => 'Ollama (kendi sunucunuz)',
+            'protokol'    => 'openai',
+            'base'        => 'http://localhost:11434/v1',
+            'model'       => 'llama3.1',
+            'anahtarsiz'  => true,
+            'not'         => 'Model kendi sunucunuzda çalışır; dışarı veri gitmez ve '
+                           . 'ücret oluşmaz. Paylaşımlı hostingde genellikle kullanılamaz.',
+            'belge'       => 'https://ollama.com/',
+        ],
+        'openai_uyumlu' => [
+            'ad'       => 'OpenAI uyumlu (serbest adres)',
+            'protokol' => 'openai',
+            'base'     => 'https://api.openai.com/v1',
+            'model'    => 'gpt-4o-mini',
+            'serbest'  => true,
+            'not'      => 'Katalogda olmayan bir uç için: taban adresi kendiniz yazın.',
+            'belge'    => '',
+        ],
+    ];
+}
+
+/** Sağlayıcı tanımı (bilinmiyorsa anthropic). */
+function ai_provider_def($key = null) {
+    $liste = ai_providers();
+    $key = $key === null ? ai_provider() : (string)$key;
+    return isset($liste[$key]) ? $liste[$key] : $liste['anthropic'];
+}
+
 /** Etkin sağlayıcı anahtarı. */
 function ai_provider() {
-    $p = setting('ai_provider', 'anthropic');
-    return in_array($p, ['anthropic', 'openai_uyumlu'], true) ? $p : 'anthropic';
+    $p = (string)setting('ai_provider', 'anthropic');
+    return array_key_exists($p, ai_providers()) ? $p : 'anthropic';
+}
+
+/** Sağlayıcının konuştuğu protokol: 'anthropic' | 'openai' */
+function ai_protocol() {
+    $d = ai_provider_def();
+    return isset($d['protokol']) && $d['protokol'] === 'anthropic' ? 'anthropic' : 'openai';
+}
+
+/** Bu sağlayıcı API anahtarı istiyor mu? (Ollama istemez.) */
+function ai_needs_key() {
+    $d = ai_provider_def();
+    return empty($d['anahtarsiz']);
 }
 
 /** Etkin model adı. */
 function ai_model() {
     $m = trim((string)setting('ai_model', ''));
     if ($m !== '') { return $m; }
-    return ai_provider() === 'anthropic' ? 'claude-sonnet-5' : 'gpt-4o-mini';
+    $d = ai_provider_def();
+    return (string)arr($d, 'model', 'gpt-4o-mini');
 }
 
 /** API anahtarı (ham). Panelde asla ham gösterilmez. */
@@ -55,8 +172,8 @@ function ai_api_key_masked() {
 /** Sağlayıcının taban URL'i. */
 function ai_base_url() {
     $u = trim((string)setting('ai_base_url', ''));
-    if (ai_provider() === 'anthropic') { return $u !== '' ? rtrim($u, '/') : 'https://api.anthropic.com'; }
-    return $u !== '' ? rtrim($u, '/') : 'https://api.openai.com/v1';
+    if ($u !== '') { return rtrim($u, '/'); }
+    return rtrim((string)arr(ai_provider_def(), 'base', 'https://api.openai.com/v1'), '/');
 }
 
 /** Test modunda mıyız? */
@@ -325,7 +442,7 @@ function ai_complete($userPrompt, array $opts = []) {
     $maxTokens = isset($opts['max_tokens']) ? (int)$opts['max_tokens'] : 1600;
     $temperature = isset($opts['temperature']) ? (float)$opts['temperature'] : 0.4;
 
-    if (ai_provider() === 'anthropic') {
+    if (ai_protocol() === 'anthropic') {
         $url = ai_base_url() . '/v1/messages';
         $headers = [
             'content-type: application/json',
@@ -341,10 +458,20 @@ function ai_complete($userPrompt, array $opts = []) {
         ];
     } else {
         $url = ai_base_url() . '/chat/completions';
-        $headers = [
-            'content-type: application/json',
-            'authorization: Bearer ' . ai_api_key(),
-        ];
+        $headers = ['content-type: application/json'];
+        // Ollama gibi yerel uclar anahtar istemez; bos bir Bearer gondermek
+        // bazi sunuculari 401'e dusurur.
+        if (ai_needs_key() || ai_api_key() !== '') {
+            $headers[] = 'authorization: Bearer ' . ai_api_key();
+        }
+        // OpenRouter bu iki basligi ATIF icin onerir (zorunlu degil): istekler
+        // sitenin adiyla eslesir ve saglayici panelinde ayirt edilebilir.
+        if (ai_provider() === 'openrouter') {
+            $ref = base_url();
+            if ($ref !== '') { $headers[] = 'HTTP-Referer: ' . $ref; }
+            $ad = trim((string)setting('site_title', ''));
+            if ($ad !== '') { $headers[] = 'X-OpenRouter-Title: ' . $ad; }
+        }
         $payload = [
             'model'       => ai_model(),
             'max_tokens'  => $maxTokens,
@@ -375,7 +502,7 @@ function ai_complete($userPrompt, array $opts = []) {
     $text = '';
     $tin = 0;
     $tout = 0;
-    if (ai_provider() === 'anthropic') {
+    if (ai_protocol() === 'anthropic') {
         if (!empty($data['content']) && is_array($data['content'])) {
             foreach ($data['content'] as $blk) {
                 if (isset($blk['type']) && $blk['type'] === 'text') { $text .= (string)$blk['text']; }

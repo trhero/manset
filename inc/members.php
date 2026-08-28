@@ -803,6 +803,13 @@ function member_mail_from() {
 
 /** Tek işlemsel e-posta gönderir (UTF-8 başlıklı düz metin). */
 function member_mail_send($to, $subject, $body) {
+    // DEMO KİPİ: hiçbir e-posta gönderilmez. Herkese açık bir demoda yönetici
+    // hesabı verilen ziyaretçi, doğrulama/sıfırlama/bülten akışlarını istediği
+    // adrese tetikleyebilir — yani sunucu bir spam aracına dönüşür ve gönderen
+    // alan adı kara listeye düşer.
+    if (function_exists('demo_mail_blocked') && demo_mail_blocked()) {
+        return ['ok' => false, 'error' => 'Demo kurulumunda e-posta gönderimi kapalıdır.'];
+    }
     if (!member_mail_available()) { return ['ok' => false, 'error' => 'E-posta gönderimi kapalı.']; }
     if (!filter_var($to, FILTER_VALIDATE_EMAIL)) { return ['ok' => false, 'error' => 'Geçersiz alıcı.']; }
 

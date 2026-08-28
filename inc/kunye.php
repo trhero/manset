@@ -630,6 +630,8 @@ function corrections_mail_available() {
  * @return array ['ok'=>bool,'error'=>string]
  */
 function corrections_mail_send($to, $subject, $body) {
+    // DEMO KİPİ: bkz. member_mail_send() — demo spam aracı olmamalı.
+    if (function_exists('demo_mail_blocked') && demo_mail_blocked()) { return false; }
     if (!corrections_mail_available()) { return ['ok' => false, 'error' => 'E-posta gönderimi kapalı.']; }
     if (function_exists('member_mail_send')) { return member_mail_send($to, $subject, $body); }
 

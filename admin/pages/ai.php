@@ -149,7 +149,7 @@ $promptLabels = [
   <div class="izgara-4 bosluk-alt">
     <div class="sayac vurgulu">
       <div class="deger" style="font-size:20px"><?= esc(ai_status_text()) ?></div>
-      <div class="etiket"><?= esc(ai_provider() === 'anthropic' ? 'Anthropic' : 'OpenAI uyumlu') ?> · <?= esc(ai_model()) ?></div>
+      <div class="etiket"><?= esc((string)arr(ai_provider_def(), 'ad', ai_provider())) ?> · <?= esc(ai_model()) ?></div>
     </div>
     <div class="sayac">
       <div class="deger"><?= esc(ai_panel_num($ozet['calls'])) ?></div>
@@ -181,9 +181,34 @@ $promptLabels = [
           <div class="form-satir">
             <div class="form-alan">
               <label for="ai_provider">Sağlayıcı</label>
+              <?php
+                // Liste KATALOGDAN uretilir (inc/ai.php > ai_providers()).
+                // Elle yazilan bir liste, katalogda tanimli bir saglayiciyi
+                // secilemez birakirdi.
+                $saglayiciSecenek = [];
+                foreach (ai_providers() as $sk => $sd) { $saglayiciSecenek[$sk] = (string)$sd['ad']; }
+              ?>
               <select id="ai_provider" name="provider">
-                <?= admin_options(['anthropic' => 'Anthropic (Claude)', 'openai_uyumlu' => 'OpenAI uyumlu'], ai_provider()) ?>
+                <?= admin_options($saglayiciSecenek, ai_provider()) ?>
               </select>
+              <?php $sagDef = ai_provider_def(); ?>
+              <span class="form-yardim" id="saglayiciNot"><?= esc((string)arr($sagDef, 'not', '')) ?></span>
+              <?php
+                // Her saglayicinin varsayilanlarini JS'e ver: secim degisince
+                // model ve taban adres yer tutuculari da degissin.
+                $sagVeri = [];
+                foreach (ai_providers() as $sk => $sd) {
+                    $sagVeri[$sk] = [
+                        'base'       => (string)$sd['base'],
+                        'model'      => (string)$sd['model'],
+                        'not'        => (string)arr($sd, 'not', ''),
+                        'serbest'    => !empty($sd['serbest']),
+                        'anahtarsiz' => !empty($sd['anahtarsiz']),
+                        'belge'      => (string)arr($sd, 'belge', ''),
+                    ];
+                }
+              ?>
+              <script>window.MANSET_AI_SAGLAYICI = <?= json_encode($sagVeri, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>;</script>
             </div>
             <div class="form-alan">
               <label for="ai_model">Model</label>
@@ -193,11 +218,15 @@ $promptLabels = [
             </div>
           </div>
 
-          <div class="form-alan" id="satirBaseUrl"<?= ai_provider() === 'openai_uyumlu' ? '' : ' hidden' ?>>
+          <div class="form-alan" id="satirBaseUrl">
             <label for="ai_base_url">Taban adres (base URL)</label>
             <input type="url" id="ai_base_url" name="base_url" value="<?= esc(setting('ai_base_url', '')) ?>"
-                   maxlength="255" placeholder="https://api.openai.com/v1">
-            <span class="form-yardim">OpenAI uyumlu uçlar için. <code>/chat/completions</code> bu adresin sonuna eklenir.</span>
+                   maxlength="255" placeholder="<?= esc((string)arr($sagDef, 'base', '')) ?>">
+            <span class="form-yardim">
+              Boş bırakırsanız seçtiğiniz sağlayıcının varsayılan adresi kullanılır.
+              Vekil sunucu ya da kendi uç noktanız varsa buraya yazın;
+              <code>/chat/completions</code> bu adresin sonuna eklenir.
+            </span>
           </div>
 
           <div class="form-alan">
@@ -641,12 +670,37 @@ $promptLabels = [
   var ayarForm = M.qs('#aiAyarForm');
   if (ayarForm) {
     var saglayici = M.qs('#ai_provider', ayarForm);
-    var baseSatir = M.qs('#satirBaseUrl', ayarForm);
-    function baseGoster() {
-      if (baseSatir) { baseSatir.hidden = (saglayici.value !== 'openai_uyumlu'); }
+    var modelAlan = M.qs('#ai_model', ayarForm);
+    var baseAlan  = M.qs('#ai_base_url', ayarForm);
+    var notAlan   = M.qs('#saglayiciNot', ayarForm);
+    var anahtarAlan = M.qs('#ai_api_key', ayarForm);
+    var veri = window.MANSET_AI_SAGLAYICI || {};
+
+    /* Sağlayıcı değişince YER TUTUCULAR güncellenir — girilen değerler DEĞİL.
+       Yayıncının yazdığı bir modeli ya da vekil adresini seçim değiştirdi diye
+       silmek, sessiz veri kaybı olurdu. Yer tutucu "boş bırakırsan bu kullanılır"
+       demektir; alan doluysa ona dokunulmaz. */
+    function saglayiciUygula() {
+      var d = veri[saglayici.value];
+      if (!d) { return; }
+      if (modelAlan) { modelAlan.placeholder = d.model || ''; }
+      if (baseAlan)  { baseAlan.placeholder  = d.base  || ''; }
+      if (notAlan) {
+        notAlan.textContent = d.not || '';
+        if (d.belge) {
+          var a = document.createElement('a');
+          a.href = d.belge; a.target = '_blank'; a.rel = 'noopener';
+          a.textContent = ' Belgeler ↗';
+          notAlan.appendChild(a);
+        }
+      }
+      /* Ollama gibi yerel uçlar anahtar istemez. */
+      if (anahtarAlan) {
+        anahtarAlan.placeholder = d.anahtarsiz ? 'bu sağlayıcı anahtar istemiyor' : '';
+      }
     }
-    saglayici.addEventListener('change', baseGoster);
-    baseGoster();
+    saglayici.addEventListener('change', saglayiciUygula);
+    saglayiciUygula();
 
     ayarForm.addEventListener('submit', function (e) {
       e.preventDefault();

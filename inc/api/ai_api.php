@@ -89,8 +89,11 @@ api_register('ai.save_settings', function () {
     $save = [];
 
     if (ai_api_has('provider')) {
+        // Beyaz liste KATALOGDAN gelir. Eskiden iki ad elle yaziliydi; yeni bir
+        // saglayici eklendiginde bu satir unutulsa secim SESSIZCE anthropic'e
+        // duserdi - yayinci OpenRouter sectigini sanip Anthropic'e istek atardi.
         $p = (string)ai_api_field('provider', 'anthropic');
-        $save['ai_provider'] = in_array($p, ['anthropic', 'openai_uyumlu'], true) ? $p : 'anthropic';
+        $save['ai_provider'] = array_key_exists($p, ai_providers()) ? $p : 'anthropic';
     }
     if (ai_api_has('model')) {
         $save['ai_model'] = sanitize_line((string)ai_api_field('model', ''), 120);

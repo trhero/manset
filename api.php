@@ -52,6 +52,16 @@ if ($route['perm'] !== 'public') {
     if (!can($user, $route['perm'])) { json_err('Bu işlem için yetkiniz yok.', 403); }
 }
 
+// DEMO KAPISI (1.4). Yetki kapısının HEMEN ardında, tek noktada.
+// Düğme gizlemek kısıt değildir: uçlar buradan doğrudan çağrılabilir, bu yüzden
+// engelleme sunucuda ve merkezî olmak zorundadır.
+if (function_exists('demo_block_reason')) {
+    $mansetDemoNeden = demo_block_reason($action);
+    if ($mansetDemoNeden !== '') {
+        json_err('Demo kurulumunda bu işlem kapalıdır. ' . $mansetDemoNeden, 403);
+    }
+}
+
 // CSRF kapısı (yazma istekleri)
 if ($route['csrf'] && $method !== 'GET' && $method !== 'HEAD') { csrf_guard(); }
 

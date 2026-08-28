@@ -349,6 +349,46 @@ $maddeler[] = kontrol_madde(
   . 'gibi durur ama eksikliği amatör izlenimi bırakır.',
     admin_url('settings'), 'Ayarlar →');
 
+/* 5b) HTTPS sertifika kök paketi ------------------------------------------ */
+// NEDEN AYRI MADDE: cURL kurulu olabilir ama PHP'ye kök sertifika paketi
+// tanıtılmamış olabilir. O zaman `https://` ile yapılan HER dış istek
+// "unable to get local issuer certificate" ile düşer: RSS çekimi, yapay zekâ
+// çağrıları, IndexNow bildirimi, oEmbed gömme, uzak yedek.
+//
+// Yayıncı için bu, en anlaşılmaz arıza türüdür — kaynak adresi tarayıcıda
+// açılıyor, panelde "adres yanıt vermedi" yazıyor. Ölçüm sırasında bu tam
+// olarak yaşandı: aynı beslemeler tarayıcıda ve doğrulamasız curl'de
+// çalışırken uygulamada 3/3 hata verdi.
+$caYol = trim((string)ini_get('curl.cainfo'));
+if ($caYol === '') { $caYol = trim((string)ini_get('openssl.cafile')); }
+$caVar = ($caYol !== '' && @is_file($caYol));
+if (!$caVar) {
+    // Bazı derlemeler paketi ini'de göstermeden sistemden bulur. Kesin yanıt
+    // için GERÇEK bir istek denenir; sonuç kısa süre önbelleğe alınır.
+    $caVar = (setting('kontrol_ca_ok', '') === '1');
+    $sonDeneme = (int)setting('kontrol_ca_ts', '0');
+    if (!$caVar && function_exists('curl_init') && (time() - $sonDeneme) > 3600) {
+        $ch = curl_init('https://www.google.com/generate_204');
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 6,
+                                CURLOPT_NOBODY => true, CURLOPT_SSL_VERIFYPEER => true]);
+        curl_exec($ch);
+        $caVar = (curl_errno($ch) === 0);
+        curl_close($ch);
+        setting_set('kontrol_ca_ok', $caVar ? '1' : '0');
+        setting_set('kontrol_ca_ts', (string)time());
+    }
+}
+$maddeler[] = kontrol_madde(
+    'HTTPS sertifika doğrulaması',
+    $caVar ? 'olumlu' : 'olumsuz',
+    $caVar ? 'çalışıyor' : 'kök sertifika paketi bulunamadı',
+    'Kurulu değilse https:// ile yapılan HER dış istek başarısız olur: RSS çekimi, '
+  . 'yapay zekâ çağrıları, arama motoru bildirimi, gömme ve uzak yedek. Hata mesajı '
+  . '"adres yanıt vermedi" gibi görünür ve kaynağın kendisinde arızayı aratır. '
+  . 'Çözüm: hosting sağlayıcınızdan php.ini içinde curl.cainfo (ve openssl.cafile) '
+  . 'değerinin bir cacert.pem dosyasına ayarlanmasını isteyin.',
+    admin_url('logs'), 'Günlükler →');
+
 /* 6) Yapay zekâ anahtarı -------------------------------------------------- */
 $aiDurum = ai_status_text();
 $maddeler[] = kontrol_madde(

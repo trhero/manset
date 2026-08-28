@@ -21,6 +21,7 @@
  *   php tests/probe.php <kök> guvenlik_basliklari
  *   php tests/probe.php <kök> cors
  *   php tests/probe.php <kök> bagimlilik
+ *   php tests/probe.php <kök> demo_gate
  *
  * NEDEN AYRI BETİK: kabuktan `php -r` ile kod göndermek Git Bash'te kırılgan —
  * MSYS yol dönüşümü yalnız ARGÜMAN konumundaki yolları çevirir, kod dizesinin
@@ -380,6 +381,62 @@ switch ($soru) {
             if (file_exists($root . '/' . $ad)) { $iz[] = $ad; }
         }
         echo implode(',', $iz);
+        break;
+
+    case 'demo_gate':
+        // DEMO KARA LISTESI EKSIK MI?
+        //
+        // Demo kipi kara liste kullanir (beyaz liste degil): amac sistemi
+        // GOSTERMEK, yani yeni bir ozellik varsayilan olarak denenebilir olmali.
+        // Bunun bedeli, yeni eklenen TEHLIKELI bir ucun listeye yazilmayi
+        // unutmasidir. Bu sonda tam o riski olcer.
+        //
+        // "Tehlikeli" olcutu: disariya cikan, ucret ureten, kod calistiran,
+        // kisisel veri disa aktaran ya da kurulumu ele geciren uclar.
+        require_once $root . '/inc/demo.php';
+        if (!function_exists('demo_block_reason')) { echo 'MODUL_YOK'; break; }
+
+        // Uc adlarini kaynaktan topla (calistirmadan).
+        $uclar = [];
+        foreach ((array)glob($root . '/inc/api/*.php') as $dosya) {
+            $metin = (string)file_get_contents($dosya);
+            if (preg_match_all('/api_register\(\s*.([a-z0-9_]+\.[a-z0-9_]+)./i', $metin, $m)) {
+                foreach ($m[1] as $u) { $uclar[$u] = true; }
+            }
+        }
+
+        // Tehlike belirtisi: uc adinda gecen sozcukler.
+        $riskli = ['/^ai\./', '/^backup\./', '/^payment\./', '/\.export$/',
+                   '/^users\./', '/^roles\./', '/^theme\.save_css$/', '/^ads\.save$/',
+                   '/^share\./', '/fetch_now$/', '/^tools\.(migrate|flush)/'];
+
+        // demo_mode() kapaliyken demo_block_reason() daima bos doner; sonda
+        // KARARI kendisi vermeli, yoksa her zaman temiz gorunur.
+        $liste = demo_blocked_actions();
+        $desen = demo_blocked_patterns();
+        $acik = [];
+        foreach (array_keys($uclar) as $u) {
+            $tehlikeli = false;
+            foreach ($riskli as $r) { if (preg_match($r, $u)) { $tehlikeli = true; break; } }
+            if (!$tehlikeli) { continue; }
+            if (isset($liste[$u])) { continue; }
+            // Bakilmis ve bilerek acik birakilmis salt-okunur uclar.
+            if (function_exists('demo_reviewed_open') && isset(demo_reviewed_open()[$u])) { continue; }
+            $kapali = false;
+            foreach (array_keys($desen) as $d) { if (preg_match($d, $u)) { $kapali = true; break; } }
+            if (!$kapali) { $acik[] = $u; }
+        }
+        // HAYALI GIRIS DENETIMI.
+        // Kara listeye var OLMAYAN bir uc adi yazmak, engellemis gibi gorunup
+        // hicbir sey engellememektir - guvenlikte en kotu durum. Bu dosyanin
+        // ilk halinde ALTI hayali ad vardi ve olcum onlari boyle buldu.
+        $hayali = [];
+        foreach (array_keys($liste) as $u) {
+            if (!isset($uclar[$u])) { $hayali[] = 'HAYALI:' . $u; }
+        }
+        sort($hayali);
+        sort($acik);
+        echo implode(',', array_merge($hayali, $acik));
         break;
 
     default:
