@@ -28,6 +28,24 @@ $slotaGore = [];
 foreach ($ogeler as $o) { $slotaGore[$o['slot_key']][] = $o; }
 $onayBekleyen = 0;
 foreach ($ogeler as $o) { if (!empty($o['needs_approval'])) { $onayBekleyen++; } }
+
+/* 1.2-03 — sponsorlu bayrağı, sayaç raporu ve ads.txt.
+   inc/ads.php admin/index.php tarafından zaten yüklenir; yine de emin olalım. */
+require_once ROOT_DIR . '/inc/ads.php';
+
+$sponsorlu = [];
+try {
+    foreach (qa('SELECT id, is_sponsored FROM ads') as $s) { $sponsorlu[(int)$s['id']] = (int)$s['is_sponsored'] === 1; }
+} catch (Throwable $e) { $sponsorlu = []; }   // göç henüz uygulanmamış
+
+$rGun     = 30;
+$rapor    = ads_stats_summary($rGun);
+$rToplam  = ['imp' => 0, 'clk' => 0];
+foreach ($rapor as $r) { $rToplam['imp'] += $r['impressions']; $rToplam['clk'] += $r['clicks']; }
+$adsTxt   = ads_txt_content();
+$adsTxtSt = ads_txt_static_state();
+$slotAd   = [];
+foreach ($slotlar as $k => $b) { $slotAd[$k] = $b[0]; }
 ?>
 
 <div class="sayfa-basligi">
@@ -85,7 +103,12 @@ foreach ($ogeler as $o) { if (!empty($o['needs_approval'])) { $onayBekleyen++; }
                     <span class="satir-alt"><?= (int)$o['html_len'] ?> karakter kod</span>
                   <?php endif; ?>
                 </td>
-                <td class="dar"><?= admin_badge($o['kind_label'], $o['kind'] === 'image' ? 'bilgi' : 'notr') ?></td>
+                <td class="dar">
+                  <?= admin_badge($o['kind_label'], $o['kind'] === 'image' ? 'bilgi' : 'notr') ?>
+                  <?php if (!empty($sponsorlu[$o['id']])): ?>
+                    <?= admin_badge('sponsorlu', 'ai') ?>
+                  <?php endif; ?>
+                </td>
                 <td class="dar">
                   <?= admin_badge($o['state_label'], $o['state_tone']) ?>
                   <?php if (!empty($o['needs_approval'])): ?>
@@ -107,6 +130,10 @@ foreach ($ogeler as $o) { if (!empty($o['needs_approval'])) { $onayBekleyen++; }
                             data-reklam-onay="<?= (int)$o['id'] ?>" data-on="<?= $o['approved'] ? 0 : 1 ?>">
                       <?= $o['approved'] ? 'Onayı geri al' : 'Onayla' ?></button>
                   <?php endif; ?>
+                  <button type="button" class="dugme kucuk" data-reklam-sponsor="<?= (int)$o['id'] ?>"
+                          data-on="<?= !empty($sponsorlu[$o['id']]) ? 0 : 1 ?>"
+                          title="Sponsorlu içerik, okuyucuya ayrı bir etiketle bildirilir.">
+                    <?= !empty($sponsorlu[$o['id']]) ? 'Sponsorlu değil' : 'Sponsorlu yap' ?></button>
                   <button type="button" class="dugme kucuk tehlike" data-reklam-sil="<?= (int)$o['id'] ?>"
                           data-onay="Bu reklam silinecek. Onaylıyor musunuz?">Sil</button>
                 </td>
@@ -118,6 +145,95 @@ foreach ($ogeler as $o) { if (!empty($o['needs_approval'])) { $onayBekleyen++; }
     <?php endif; ?>
   </div>
 <?php endforeach; ?>
+
+<!-- ============================================ 1.2-03 · sayaç raporu -->
+<div class="kart">
+  <div class="kart-baslik">
+    <span>Gösterim ve tıklama · son <?= (int)$rGun ?> gün</span>
+    <span class="mini soluk"><?= ads_counting_enabled() ? 'sayaç açık' : 'sayaç kapalı (Ayarlar → Reklam)' ?></span>
+  </div>
+
+  <div class="izgara-3 bosluk-alt">
+    <div class="sayac"><span class="deger"><?= number_format($rToplam['imp'], 0, ',', '.') ?></span><span class="etiket">gösterim</span></div>
+    <div class="sayac"><span class="deger"><?= number_format($rToplam['clk'], 0, ',', '.') ?></span><span class="etiket">tıklama</span></div>
+    <div class="sayac"><span class="deger"><?= $rToplam['imp'] > 0 ? number_format($rToplam['clk'] * 100 / $rToplam['imp'], 2, ',', '.') : '0,00' ?>%</span><span class="etiket">tıklama oranı</span></div>
+  </div>
+
+  <div class="uyari bilgi mini">
+    <strong>Gösterim tarayıcıda sayılır, sunucuda değil.</strong>
+    Sayfa önbelleği açıkken hazır HTML dosyası sunulur ve PHP hiç çalışmaz; sunucu
+    tarafı sayaç önbellek süresi başına en çok bir kez artardı. Reklam kutusu ekrana
+    girdiğinde tarayıcı çerezsiz küçük bir istek atar. <strong>Reklam engelleyici kullanan
+    okuyucular sayılmaz</strong> — bu rakam reklam ağının kendi raporunun yerine geçmez.
+  </div>
+
+  <?php if (!$rapor): ?>
+    <p class="bos-durum">Henüz kayıtlı gösterim yok.</p>
+  <?php else: ?>
+    <div class="tablo-sarma">
+      <table class="tablo">
+        <thead><tr><th>Reklam</th><th>Alan</th><th class="dar">Gösterim</th><th class="dar">Tıklama</th><th class="dar">Oran</th></tr></thead>
+        <tbody>
+          <?php foreach ($rapor as $r): ?>
+            <tr>
+              <td><?= esc($r['title']) ?></td>
+              <td class="dar mini"><?= esc(isset($slotAd[$r['slot_key']]) ? $slotAd[$r['slot_key']] : $r['slot_key']) ?></td>
+              <td class="dar"><?= number_format($r['impressions'], 0, ',', '.') ?></td>
+              <td class="dar"><?= number_format($r['clicks'], 0, ',', '.') ?></td>
+              <td class="dar"><?= number_format($r['ctr'], 2, ',', '.') ?>%</td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  <?php endif; ?>
+</div>
+
+<!-- ============================================ 1.2-03 · ads.txt -->
+<div class="kart">
+  <div class="kart-baslik">
+    <span>ads.txt</span>
+    <span class="mini soluk"><?= esc(base_url()) ?>/ads.txt</span>
+  </div>
+
+  <p class="kucuk soluk">
+    Reklam satıcılarınızı bildiren düz metin dosya. Her satır bir yetkilendirmedir;
+    <code>#</code> ile başlayan satırlar yorumdur. İçeriği reklam ağınız verir —
+    buraya olduğu gibi yapıştırın.
+  </p>
+
+  <div class="form-alan">
+    <label for="adsTxt">İçerik</label>
+    <textarea id="adsTxt" class="kod-alan" rows="10" spellcheck="false"
+              placeholder="ornek-saglayici.com, 12345, DIRECT, f08c47fec0942fa0"><?= esc($adsTxt) ?></textarea>
+    <span class="form-yardim" id="adsTxtDurum"><?= (int)ads_txt_line_count($adsTxt) ?> yetkilendirme satırı · <?= (int)strlen($adsTxt) ?> bayt</span>
+  </div>
+
+  <div class="dugme-grup">
+    <button type="button" class="dugme birincil" id="adsTxtKaydet">Kaydet</button>
+    <a class="dugme" href="<?= esc(base_url()) ?>/ads.txt.php" target="_blank" rel="noopener">Çıktıyı gör →</a>
+    <button type="button" class="dugme" id="adsTxtStatik">Kök dizine statik dosya yaz</button>
+    <?php if ($adsTxtSt['var']): ?>
+      <button type="button" class="dugme tehlike" id="adsTxtStatikSil"
+              data-onay="Kökteki ads.txt dosyası silinecek. Onaylıyor musunuz?">Statik dosyayı sil</button>
+    <?php endif; ?>
+  </div>
+
+  <?php if ($adsTxtSt['var'] && !$adsTxtSt['ayni']): ?>
+    <div class="uyari warn mini bosluk-ust">
+      Kök dizindeki <code>ads.txt</code> dosyası buradaki içerikten <strong>farklı</strong>.
+      Ziyaretçiye ve tarayıcılara dosya sunulur. "Kök dizine statik dosya yaz" ile eşitleyin.
+    </div>
+  <?php elseif ($adsTxtSt['var']): ?>
+    <div class="uyari ok mini bosluk-ust">Kök dizinde güncel bir <code>ads.txt</code> dosyası var; <code>/ads.txt</code> doğrudan sunuluyor.</div>
+  <?php else: ?>
+    <div class="uyari bilgi mini bosluk-ust">
+      <code>/ads.txt</code> adresinin çalışması için ya kök dizine statik dosya yazılmalı
+      ya da yönlendirici bu yolu <code>ads.txt.php</code> dosyasına bağlamalıdır.
+      Dosya her hâlükârda <code>/ads.txt.php</code> adresinden erişilebilir.
+    </div>
+  <?php endif; ?>
+</div>
 
 <script>
 window.__REKLAM = <?= json_encode([
@@ -287,6 +403,50 @@ M.hazir(function () {
         .then(function (r) { if (M.sonuc(r, 'Reklam silindi.')) { location.reload(); } });
     });
   });
+
+  // ------------------------------------------------ 1.2-03 sponsorlu bayrağı
+  M.qsa('[data-reklam-sponsor]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      M.api('ads.sponsored', { id: b.getAttribute('data-reklam-sponsor'), on: parseInt(b.getAttribute('data-on'), 10) })
+        .then(function (r) { if (M.sonuc(r)) { location.reload(); } });
+    });
+  });
+
+  // ------------------------------------------------ 1.2-03 ads.txt
+  var txtAlan = M.qs('#adsTxt');
+  if (txtAlan) {
+    var durum = M.qs('#adsTxtDurum');
+    var sayFn = function () {
+      var satir = txtAlan.value.split('\n').filter(function (s) {
+        var t = s.trim(); return t !== '' && t.charAt(0) !== '#';
+      }).length;
+      durum.textContent = satir + ' yetkilendirme satırı · ' + txtAlan.value.length + ' bayt';
+    };
+    txtAlan.addEventListener('input', sayFn);
+
+    M.qs('#adsTxtKaydet').addEventListener('click', function () {
+      M.api('ads.txt_save', { content: txtAlan.value }).then(function (r) {
+        if (M.sonuc(r, 'ads.txt kaydedildi.')) { sayFn(); }
+      });
+    });
+
+    var statik = M.qs('#adsTxtStatik');
+    if (statik) {
+      statik.addEventListener('click', function () {
+        M.api('ads.txt_static', { remove: 0 }).then(function (r) {
+          if (M.sonuc(r)) { location.reload(); }
+        });
+      });
+    }
+    var statikSil = M.qs('#adsTxtStatikSil');
+    if (statikSil) {
+      statikSil.addEventListener('click', function () {
+        M.api('ads.txt_static', { remove: 1 }).then(function (r) {
+          if (M.sonuc(r)) { location.reload(); }
+        });
+      });
+    }
+  }
 });
 </script>
 

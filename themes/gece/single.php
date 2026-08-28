@@ -63,6 +63,9 @@ $sureGoster = !$kilitliHaber && theme_setting('show_reading_time', '1') === '1';
         <?php endif; ?>
         <?php if ($sureGoster): ?><span class="okuma-suresi"><?= (int)$sure ?> dk okuma</span><?php endif; ?>
         <span class="goruntulenme"><?= (int)$post['view_count'] ?> görüntülenme</span>
+
+        <?php /* Okuma ayarları (1.2-13): yazı ölçeği + görünüm; tercih localStorage'da. */ ?>
+        <?php part('okuma-ayarlari', ['yer' => 'haber']); ?>
         <?php if (!empty($post['ai_generated'])): ?>
           <span class="rozet-ai-uzun">Yapay zekâ desteğiyle hazırlandı, editör onayından geçti</span>
         <?php endif; ?>

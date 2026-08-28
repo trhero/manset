@@ -7,7 +7,14 @@ if (!defined('MANSET_BOOTSTRAPPED')) { exit; }
 
 $sidebarPos = theme_setting('sidebar_position', 'right');
 ?><!doctype html>
-<html lang="tr">
+<?php
+/* Okuma tercihleri (1.2-13): sunucu YALNIZ varsayılanı basar — okurun seçimi
+   localStorage'da ve <head>'deki `okuma-bas` betiğiyle uygulanır. Böylece HTML
+   tüm anonim ziyaretçiler için aynı kalır ve sayfa önbelleği bozulmaz. */
+$okumaTema = theme_dark_mode() ? 'koyu' : 'sistem';
+$okumaGoruntu = theme_dark_mode() ? 'koyu' : 'acik';
+?>
+<html lang="tr" data-tema="<?= esc($okumaTema) ?>" data-goruntu="<?= esc($okumaGoruntu) ?>" data-olcek="orta">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -16,6 +23,7 @@ $sidebarPos = theme_setting('sidebar_position', 'right');
 <?= theme_font_link() ?>
 <link rel="stylesheet" href="<?= esc(theme_url('style.css')) ?>?v=<?= esc(MANSET_VERSION) ?>">
 <style><?= theme_css_vars() ?><?= theme_custom_css() ?></style>
+<?php part('okuma-bas'); ?>
 </head>
 <body class="tema-yerel kenar-<?= esc($sidebarPos) ?> kart-<?= esc(theme_setting('card_style', 'border')) ?>">
 

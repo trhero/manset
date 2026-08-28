@@ -203,7 +203,14 @@ function render($template, $vars = [], $status = 200) {
         // hiç paylaşılmamalı; anonimde kısa süreli paylaşım güvenlidir
         // (uygulamanın kendi dosya önbelleği zaten aynı kuralı uygular).
         header('Vary: Cookie');
-        if (function_exists('has_session_cookie') && has_session_cookie()) {
+        // ÖDEME DUVARI (1.2-05): oturum çerezi yoksa da yanıt kişiye özel
+        // OLABİLİR — ölçülü hakla açılmış tam metin taşıyor olabilir. Bu koşul
+        // olmadan o yanıt `s-maxage=60` ile CDN'de PAYLAŞILIYORDU, yani bir
+        // okurun hakkıyla açtığı metin başkalarına bedava servis ediliyordu
+        // (Ajan-D ölçtü).
+        $mansetOzel = (function_exists('has_session_cookie') && has_session_cookie())
+                   || (function_exists('paywall_response_is_private') && paywall_response_is_private());
+        if ($mansetOzel) {
             header('Cache-Control: private, no-store, max-age=0');
         } else {
             header('Cache-Control: public, max-age=0, s-maxage=60');
@@ -544,7 +551,11 @@ function ad_slot($key) {
         } catch (Throwable $e) { $cache = []; }
     }
     if (empty($cache[$key])) { return ''; }
-    return '<div class="ad-slot ad-' . esc($key) . '">' . implode("\n", $cache[$key]) . '</div>';
+    $html = '<div class="ad-slot ad-' . esc($key) . '">' . implode("\n", $cache[$key]) . '</div>';
+    // KANCA (1.2-03): gösterim sayacı ve sponsorlu rozeti inc/ads.php içindedir.
+    // Modül yoksa reklam 1.1'deki gibi basılır.
+    if (function_exists('ads_slot_decorate')) { $html = (string)ads_slot_decorate($key, $html); }
+    return $html;
 }
 
 /**
@@ -690,10 +701,25 @@ function post_body_html($post) {
 
     // Faz 7 içerik kilidi — TEK KAPI. Temalara bırakılmaz ki bir tema unutunca
     // tam metin sızmasın. Kilitliyse yalnız teaser + abone kutusu döner.
-    if (is_array($post) && function_exists('post_is_locked') && post_is_locked($post)) {
+    // OKUR KAPISI (1.2-05). Eskiden yalnız `post_is_locked()` soruluyordu; o
+    // KİMLİĞE bakar (abone mi?). Ölçülü duvar ise SAYAÇLA çalışır: "bu ay N
+    // ücretsiz haber", hediye bağlantısı, deneme. Kapı dar tutuldu — yalnız
+    // burada, çünkü `paywall_allow()` yan etkilidir (hak düşürür, çerez yazar).
+    // `post_is_locked()` merkezi olarak değiştirilseydi inc/seo.php beslemeleri
+    // de onu çağırdığı için BESLEMEDE çerez yazılabilirdi (CONTRACTS §3.1 ihlali).
+    // Ödeme duvarı modülü yoksa bu ifade `post_is_locked()` ile birebir aynıdır.
+    if (is_array($post) && function_exists('post_reader_can_read_full')
+        && !post_reader_can_read_full($post, current_user_if_session())) {
         return post_locked_html($post);
     }
-    return sanitize_html($body, true);
+    $html = sanitize_html($body, true);
+
+    // PARAGRAF-İÇİ REKLAM (1.2-03). Kanca TEMİZLEYİCİDEN SONRA çalışır:
+    // reklam işaretlemesi beyaz listeden geçseydi kırpılırdı. Sırası da önemli
+    // — kilitli haber YUKARIDA erken döner, yani ödeme duvarının arkasındaki
+    // metne reklam sokulmaz.
+    if (function_exists('ads_body_inject')) { $html = (string)ads_body_inject($html); }
+    return $html;
 }
 
 /** Kilitli içerik için gösterilecek önizleme + çağrı kutusu. */
@@ -706,6 +732,15 @@ function post_locked_html(array $post) {
         else { $teaser = '<p>' . esc(excerpt(arr($post, 'spot', ''), 220)) . '</p>'; }
     } else {
         $teaser = '<p>' . esc($teaser) . '</p>';
+    }
+
+    // ÖLÇÜLÜ DUVAR (1.2-05): modül kendi kutusunu döndürürse o basılır (kalan
+    // hak sayısı, deneme düğmesi, hediye açıklaması). Boş dönerse çekirdeğin
+    // kutusu kalır. BURADA — yani `$teaser` hesaplandıktan sonra: önizleme metni
+    // her iki kutuda da aynı kuralla üretilsin.
+    if (function_exists('paywall_locked_html')) {
+        $kutu = (string)paywall_locked_html($post);
+        if ($kutu !== '') { return $teaser . $kutu; }
     }
 
     $vis = (string)arr($post, 'visibility', 'public');
@@ -828,6 +863,13 @@ function post_register_view($postId) {
     // yalnizca maliyet getiriyordu. CONTRACTS 3.1: on yuz cerez VERMEZ.
     if (!rate_limit('viewuniq:' . client_ip() . ':' . $postId, 1, 21600)) { return; }
     try { q('UPDATE posts SET view_count = view_count + 1 WHERE id = :i', [':i' => $postId]); } catch (Throwable $e) { }
+
+    // KANCA (1.2-01): çerezsiz günlük toplu analitik. Kapı YUKARIDA geçildi,
+    // yani analitik de aynı 6 saatlik tekilleştirmeyi miras alır. IP burada
+    // yalnız kapı için kullanıldı; analitik modülü IP SAKLAMAZ.
+    if (function_exists('analytics_record_view')) {
+        try { analytics_record_view($postId); } catch (Throwable $e) { }
+    }
 }
 
 // ============================================================ eklenti kancaları
@@ -862,6 +904,20 @@ function cookie_notice_html() {
     return '<div class="cookie-bar" id="cookieBar" hidden>'
          . '<p>' . esc($text) . $link . '</p>'
          . '<button type="button" id="cookieOk">Tamam</button></div>';
+}
+
+/**
+ * Yayincinin panele yapistirdigi dis olcumcu kodu (Plausible/Matomo/GA).
+ *
+ * Tema <body> kapanisindan once basar. inc/analytics.php yoksa bos doner —
+ * yani bu kanca tek basina hicbir sey degistirmez.
+ *
+ * ONBELLEK NOTU: kod onbellege alinan HTML'in icine girer; bu dogrudur,
+ * cunku olcumcu kodu ziyaretciye ozel degildir. Ziyaretciye ozel bir sey
+ * basmak isteyen bir kod buraya KONMAMALIDIR.
+ */
+function analytics_head_html() {
+    return function_exists('analytics_external_html') ? (string)analytics_external_html() : '';
 }
 
 // ============================================================ Ajan-6 eklemeleri
@@ -970,8 +1026,16 @@ function breadcrumbs(array $items) {
 }
 
 /**
- * <body> sınıf listesi: "tema-<ad> sidebar-<konum> kart-<stil> sayfa-<sablon> koyu-mod"
+ * <body> sınıf listesi: "tema-<ad> sidebar-<konum> kart-<stil> sayfa-<sablon>"
  * Temalar bunu doğrudan basar; CSS bu sınıflara dayanır.
+ *
+ * `koyu-mod` SINIFI 1.2'DE KALDIRILDI. Basılıyordu ama hiçbir CSS onu
+ * kullanmıyordu (Ajan-G ölçtü) ve artık YANILTICI olurdu: yayıncının tema
+ * ayarını yansıtıyordu, oysa karanlık mod 1.2'den beri OKURUN kararı.
+ * Etkin görünüm `<html data-goruntu="acik|koyu">` özniteliğinde durur;
+ * yayıncının `theme_dark_mode()` tercihi de oraya varsayılan olarak beslenir
+ * (bkz. tema `layout.php`). İki ayrı mekanizma bırakmak, ikisinin zamanla
+ * ayrışması demekti.
  */
 function theme_body_class() {
     $slug = function ($v, $fallback) {
@@ -986,7 +1050,6 @@ function theme_body_class() {
     $ctx = view_context();
     $tpl = isset($ctx['template']) ? $slug($ctx['template'], '') : '';
     if ($tpl !== '') { $cls[] = 'sayfa-' . $tpl; }
-    if (theme_dark_mode()) { $cls[] = 'koyu-mod'; }
     return implode(' ', $cls);
 }
 

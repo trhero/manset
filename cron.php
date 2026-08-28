@@ -388,7 +388,11 @@ function cron_modules_load() {
     if (is_file($v)) { require_once $v; }
     // Not: 'ai_jobs' burada olmazsa hem YZ kuyruğu işlenmez hem de inc/rss.php
     // içindeki ai_job_enqueue() kancası sessizce atlanır (Ajan-5 raporu, Faz 2).
-    foreach (['rss', 'ai', 'ai_jobs', 'cache', 'seo', 'widgets', 'kunye', 'media', 'backup', 'members'] as $mod) {
+    // 1.2 modülleri (analytics, payment, newsletter, paywall, ads) kendi zamanlı
+    // görevlerini yüklenirken cron_register() ile bildirir; burada YÜKLENMEZLERSE
+    // görevleri hiç görünmez. Dosya yoksa sessizce atlanır.
+    foreach (array_merge(['rss', 'ai', 'ai_jobs', 'cache', 'seo', 'widgets', 'kunye', 'media', 'backup', 'members'],
+                         manset_feature_modules()) as $mod) {
         $f = __DIR__ . '/inc/' . $mod . '.php';
         if (is_file($f)) { require_once $f; }
     }
@@ -462,6 +466,14 @@ function cron_tick_all(array $secenekler = []) {
             // 6) Bakım: eski hız sınırı kayıtları, log ve cron geçmişi budaması
             'bakim'       => 'cron_maintenance',
         ];
+
+        // MODÜL GÖREVLERİ: cron_modules_load() sırasında cron_register() ile
+        // bildirilenler çekirdek görevlerin ARDINA eklenir. Çekirdek bir adı
+        // ezmesin diye çakışan anahtar yok sayılır.
+        foreach (cron_registered_tasks() as $ad => $kayit) {
+            if (isset($liste[$ad])) { continue; }
+            $liste[$ad] = function_exists($kayit['fn']) ? $kayit['fn'] : null;
+        }
 
         // NEDEN (B07): tur başına toplam süre sınırı. Panel yolunda PHP işçisinin
         // 6 görev × görev bütçesi kadar (dakikalarca) tutulmasını engeller.
@@ -609,7 +621,17 @@ function cron_web_background_ok() {
  * Ucuz görevler: ağa çıkmaz, ücret üretmez, milisaniyeler sürer.
  * Bağlantı kapatılamayan SAPI'lerde (mod_php) YALNIZ bunlar çalıştırılır.
  */
-function cron_web_cheap_tasks() { return ['zamanlanmis', 'slug', 'cache', 'bakim']; }
+function cron_web_cheap_tasks() {
+    $ucuz = ['zamanlanmis', 'slug', 'cache', 'bakim'];
+    // Modül görevleri kendilerini ucuz ilan edebilir. Bu liste cron_modules_load()
+    // ÇAĞRILMADAN da okunabildiği için (panel planı) kayıt defteri boş olabilir;
+    // o durumda yalnız çekirdek ucuz görevler döner ve pahalı bir iş KAZAEN
+    // çalıştırılmaz — güvenli taraf budur.
+    foreach (cron_registered_tasks() as $ad => $kayit) {
+        if (!empty($kayit['ucuz'])) { $ucuz[] = (string)$ad; }
+    }
+    return $ucuz;
+}
 
 /**
  * Panel tetiklemesinin çalışma planı (bütçe, tur sınırı, görev kümesi).
@@ -680,6 +702,15 @@ function cron_publish_scheduled() {
         [':n' => now()]);
     foreach ($rows as $r) {
         q('UPDATE posts SET status = \'published\', updated_at = :u WHERE id = :i', [':u' => now(), ':i' => (int)$r['id']]);
+        // ARAMA MOTORU BİLDİRİMİ (1.2-07). Kanca BURADA olmak zorunda:
+        // seo_ping_queue_new_posts() keşfi `posts.id` su işaretine dayanıyor ve
+        // zamanlanmış haber, id'si ATANDIKTAN GÜNLER SONRA yayına giriyor — o an
+        // id su işaretinin altında kaldığı için keşif onu HİÇ görmezdi.
+        // Zamanlı yayın bu sistemin ana yayın yollarından biri; sessizce atlanamaz.
+        if (function_exists('seo_ping_enqueue') && function_exists('url_post')) {
+            $tam = q1('SELECT id, slug FROM posts WHERE id = :i', [':i' => (int)$r['id']]);
+            if ($tam) { seo_ping_enqueue(url_post($tam), 'indexnow'); }
+        }
     }
     if ($rows && function_exists('cache_flush')) { cache_flush(); }
     return count($rows) . ' haber yayına alındı';

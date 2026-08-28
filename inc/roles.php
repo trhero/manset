@@ -135,6 +135,21 @@ function roles_permissions() {
         'tools.manage'             => ['Araçlar, yedek, günlükler', 'Sistem', true],
         // İçerik erişimi
         'content.premium'          => ['Aboneye özel içeriği okuma', 'Üyelik', false],
+
+        // --- 1.2 "Yayıncı paketi" ---
+        // Okunma verisi editoryal bir karar aracıdır: hangi haber tuttu, hangi
+        // kaynak trafik getiriyor. Yayın yönetmeni ve SEO editörü görmeli;
+        // muhabirin işine yaramaz, gösterilmesi de yarış duygusu üretir.
+        'analytics.view'           => ['Okunma ve trafik raporu', 'Büyüme', false],
+        // SEO ayarları site geneli davranışı değiştirir (başlık şablonu, 301,
+        // sitemap). `posts.seo` tek haberin üstverisidir; bu ondan daha geniştir.
+        'seo.manage'               => ['SEO ayarları ve yönlendirmeler', 'Büyüme', false],
+        // Bülten listesi kişisel veridir (KVKK): abonelerin e-postalarını
+        // görmek ve dışa aktarmak ayrı bir yetkidir.
+        'newsletter.manage'        => ['Bülten listesi ve dışa aktarma', 'Büyüme', false],
+        // KİLİTLİ: ödeme sağlayıcı anahtarları ve ödeme kayıtları. Panelden
+        // hiçbir role atanamaz — yalnız site sahibi (admin) erişir.
+        'payments.manage'          => ['Ödeme sağlayıcı ve abonelik tahsilatı', 'Üyelik', true],
     ];
 }
 
@@ -165,6 +180,7 @@ function roles_default_map() {
             'comments.moderate', 'comments.write', 'members.manage', 'headlines.manage',
             'ads.schedule', 'ads.creative', 'rss.manage', 'rss.autopublish', 'ai.use',
             'corrections.triage', 'corrections.publish', 'kunye.manage', 'users.manage', 'content.premium',
+            'analytics.view', 'seo.manage', 'newsletter.manage',
         ],
 
         // v1 `editor` kümesi birebir korunur + zararsız eklemeler
@@ -173,7 +189,7 @@ function roles_default_map() {
             'posts.edit_any', 'posts.edit_wire', 'posts.seo', 'posts.publish', 'posts.delete',
             'categories.manage', 'media.manage', 'media.delete_any', 'pages.manage',
             'comments.moderate', 'comments.write', 'headlines.manage', 'ai.use',
-            'corrections.triage', 'content.premium',
+            'corrections.triage', 'content.premium', 'analytics.view',
         ],
         // v1 `yazar` kümesi + yayın sonrası kendi içeriğini düzeltme
         'yazar' => [
@@ -191,9 +207,11 @@ function roles_default_map() {
         'seo_editor' => [
             'admin.access', 'posts.view', 'posts.seo', 'headlines.manage', 'media.manage',
             'theme.manage', 'ai.use', 'comments.write', 'content.premium',
+            'analytics.view', 'seo.manage',
         ],
         'ads_manager' => [
             'admin.access', 'ads.schedule', 'ads.creative', 'media.manage', 'comments.write', 'content.premium',
+            'analytics.view',
         ],
         'moderator' => [
             'admin.access', 'comments.moderate', 'comments.write', 'members.manage',
@@ -461,6 +479,23 @@ function post_can_read_full($post, $user) {
 
     if ($vis === 'members') { return true; }              // giriş yapmış her üye
     return member_tier($user) === 'premium';               // 'premium'
+}
+
+/**
+ * Ödeme duvarı kapısı: TAM metin görünsün mü?
+ *
+ * post_can_read_full() ABONELİĞE bakar ve giriş yapmamış okura her zaman
+ * 'hayır' der. Ölçülü duvar (1.2-05) bunun ÜSTÜNE binen ayrı bir karardır:
+ * "bu ay N ücretsiz haber", "hediye bağlantısı", "deneme". Kapı ayrı
+ * tutuldu çünkü abonelik kuralı KİMLİKLE, ölçülü duvar SAYAÇLA çalışır ve
+ * ikisi karışırsa hangi okurun neden içeri girdiği izlenemez hale gelir.
+ *
+ * inc/paywall.php yoksa davranış 1.1'dekiyle birebir aynıdır.
+ */
+function post_reader_can_read_full($post, $user) {
+    if (post_can_read_full($post, $user)) { return true; }
+    if (function_exists('paywall_allow')) { return (bool)paywall_allow($post, $user); }
+    return false;
 }
 
 /** Haber kilitli mi (geçerli ziyaretçi için)? */

@@ -221,12 +221,25 @@ api_register('admin_members.list', function () {
  */
 api_register('admin_members.set_tier', function () {
     $hedef = members_admin_target(members_field('user_id', 0));
-    return members_result(member_set_subscription(
-        (int)$hedef['id'],
-        (string)members_field('tier', 'free'),
-        (string)members_field('valid_until', ''),
-        (string)members_field('note', '')
+    $tier  = (string)members_field('tier', 'free');
+    $until = (string)members_field('valid_until', '');
+
+    $sonuc = members_result(member_set_subscription(
+        (int)$hedef['id'], $tier, $until, (string)members_field('note', '')
     ));
+
+    // DENETİM KAYDI (denetim turu 4, O-03).
+    // Bu uç PARA DEĞERİ olan bir şey dağıtıyor: `members.manage` yetkisi olan
+    // bir personel istediği hesaba yıllarca premium yazabilir. Yetkinin kendisi
+    // meşru (yayıncı bilerek abonelik hediye edebilmeli), eksik olan İZ'di —
+    // denetçi bunu 2099'a kadar premium yazarak gösterdi ve hiçbir kayıt kalmadı.
+    // Tahsilat ekranı `payments.manage` ile kilitliyken bu kapının izsiz kalması,
+    // kilidi anlamsız kılıyordu.
+    if (function_exists('api_admin_audit')) {
+        api_admin_audit((array)current_user(), 'members.set_tier',
+            'user:' . (int)$hedef['id'], $tier . ($until !== '' ? ' → ' . $until : ''));
+    }
+    return $sonuc;
 }, ['perm' => 'members.manage', 'methods' => ['POST']]);
 
 /**

@@ -73,8 +73,27 @@ function u_baslik($s) { printf("\n%s\n", u_renk($s, '1')); }
 // ---------------------------------------------------------------- ortam
 require_once dirname(__DIR__, 2) . '/inc/bootstrap.php';
 
-$unitDb = DB_DIR . '/manset-unit.sqlite';
+// VERİTABANI ADI SÜRECE ÖZELDİR.
+//
+// Sabit `manset-unit.sqlite` adı, aynı ağaçta eşzamanlı koşan iki turun aynı
+// dosyayı silip yeniden kurması demekti: 1.2 geliştirme dalgasında beş süreç
+// aynı anda koştu ve turlar birbirinde 24–106 SAHTE hata üretti (Ajan-E ölçtü).
+// Sahte hata, gerçek bir gerilemeden ayırt edilemediği için en pahalı hata
+// türüdür — kimse olmayan bir hatayı kovalamamalı.
+$unitDb = DB_DIR . '/manset-unit-' . getmypid() . '.sqlite';
 foreach ([$unitDb, $unitDb . '-wal', $unitDb . '-shm'] as $eski) { @unlink($eski); }
+
+// Bu süreçten arta kalanı topla. Windows'ta açık dosya silinemeyebilir; sorun
+// değil, /db/*.sqlite .gitignore kapsamındadır.
+register_shutdown_function(function () use ($unitDb) {
+    foreach ([$unitDb, $unitDb . '-wal', $unitDb . '-shm'] as $f) { @unlink($f); }
+});
+
+// Sahipsiz kalmış eski birim veritabanlarını (çökmüş turlardan) temizle.
+foreach ((array)glob(DB_DIR . '/manset-unit-*.sqlite*') as $artik) {
+    if (strpos($artik, (string)getmypid()) !== false) { continue; }
+    if (@filemtime($artik) < time() - 3600) { @unlink($artik); }
+}
 
 $GLOBALS['manset_config'] = [
     'db_driver'   => 'sqlite',

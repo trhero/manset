@@ -21,14 +21,8 @@ $weatherCache = widgets_cache_status('weather');
 $acikBloklar = [];
 foreach (home_blocks() as $b) { $acikBloklar[(string)$b['type']] = true; }
 
-// Bülten aboneleri (migration uygulanmadıysa tablo yok)
-$aboneVar = schema_has_table('newsletter_subscribers');
-$aboneSayisi = 0;
-$aboneler = [];
-if ($aboneVar) {
-    $aboneSayisi = (int)qv('SELECT COUNT(*) FROM newsletter_subscribers', [], 0);
-    $aboneler = qa('SELECT id, email, ip, created_at FROM newsletter_subscribers ORDER BY id DESC LIMIT 20');
-}
+// Bülten aboneleri artık bu ekranda SORGULANMAZ (1.2): kişisel veri kendi
+// izniyle (`newsletter.manage`) ve denetim kaydıyla ayrı ekranda okunur.
 ?>
 
 <div class="sayfa-basligi">
@@ -182,41 +176,25 @@ if ($aboneVar) {
   <button type="button" class="dugme" data-temizle="">Tüm widget önbelleğini temizle</button>
 </div>
 
-<!-- ============================================================ bülten aboneleri -->
+<!-- ================================================== bülten aboneleri (taşındı) -->
+<?php /*
+  1.2'de bu blok KALDIRILDI. Buradaki liste abonelerin e-postasını ve IP'sini
+  `settings.manage` ile gösteriyor, CSV bağlantısı da aynı izinle çalışıyordu.
+  Oysa abone listesi kişisel veridir: 1.2'de kendi izni (`newsletter.manage`) ve
+  kendi ekranı var, ve HER dışa aktarma `audit_log`'a yazılıyor — kimin ne zaman
+  listeyi indirdiği bilinebilsin diye. Bu kart o kapıyı atlıyordu.
+  Yerine yalnız bağlantı bırakıldı; sayı bile göstermiyor.
+*/ ?>
 <div class="kart">
   <div class="kart-baslik">Bülten aboneleri</div>
-  <?php if (!$aboneVar): ?>
-    <div class="uyari warn">Abone tablosu henüz oluşturulmamış. Göç (migration) çalıştırıldığında görünecektir.</div>
+  <p class="kucuk soluk">
+    Abone listesi kişisel veri olduğu için kendi ekranına taşındı; görüntüleme ve
+    dışa aktarma <strong>Bülten</strong> yetkisi ister ve denetim kaydına yazılır.
+  </p>
+  <?php if (can($adminUser, 'newsletter.manage')): ?>
+    <a class="dugme" href="<?= esc(admin_url('newsletter')) ?>">Bülten ekranına git →</a>
   <?php else: ?>
-    <p class="kucuk soluk">
-      Toplam <strong><?= (int)$aboneSayisi ?></strong> abone. Manşet yalnız abone <strong>toplar</strong>;
-      toplu e-posta gönderim motoru kapsam dışıdır. Listeyi dışa aktarıp kendi gönderim aracınızda kullanabilirsiniz.
-    </p>
-    <div class="dugme-grup bosluk-alt">
-      <a class="dugme" href="<?= esc(base_url()) ?>/api.php?a=newsletter.export">CSV indir</a>
-    </div>
-    <?php if (!$aboneler): ?>
-      <div class="bos-durum"><h3>Henüz abone yok</h3>
-        <p>Anasayfa blok diziliminde “Bülten Kaydı” bloğu açıksa form ön yüzde görünür.</p></div>
-    <?php else: ?>
-      <div class="tablo-sarma">
-        <table class="tablo">
-          <thead><tr><th>E-posta</th><th class="dar">IP</th><th class="dar">Tarih</th></tr></thead>
-          <tbody>
-            <?php foreach ($aboneler as $a): ?>
-              <tr>
-                <td><?= esc((string)$a['email']) ?></td>
-                <td class="dar mini soluk"><?= esc((string)$a['ip']) ?></td>
-                <td class="dar mini soluk"><?= esc(tr_date((string)$a['created_at'])) ?></td>
-              </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
-      </div>
-      <?php if ($aboneSayisi > count($aboneler)): ?>
-        <p class="mini soluk">Son <?= count($aboneler) ?> kayıt gösteriliyor; tamamı için CSV indirin.</p>
-      <?php endif; ?>
-    <?php endif; ?>
+    <div class="uyari warn">Bu listeyi görmek için “Bülten listesi ve dışa aktarma” yetkisi gerekir.</div>
   <?php endif; ?>
 </div>
 

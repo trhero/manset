@@ -4,6 +4,96 @@ Bu proje [Anlamsal Sürümleme](https://semver.org/lang/tr/) kurallarını izler
 
 ## [Yayımlanmadı]
 
+## [1.2.0] — "Yayıncı paketi"
+
+1.1 zemini sağlamlaştırmıştı; 1.2 **gelir, görünürlük ve okur deneyimi** getiriyor.
+Yayıncı artık okunmasını kendi ölçüyor, reklamverene rapor verebiliyor, aboneden
+tahsilat yapabiliyor ve okuru arama motorlarında görünür kılıyor.
+
+> **Yükseltme notu.** Dosyaları FTP ile üstüne attıktan sonra panele bir kez girin:
+> şema kendiliğinden güncellenir ve öncesinde yedek alınır. Kendi teması olanlar
+> **aşağıdaki kırılma notunu** okumalıdır.
+
+### Gelir
+- **Ödeme sağlayıcı adaptörü** (`inc/payment.php`, YZ adaptörü deseniyle):
+  havale/EFT (dekont yükle → yönetici onaylar) ve barındırılan ödeme sayfası +
+  webhook. **Kart verisi bu sisteme hiç girmez, dokunulmaz, saklanmaz.**
+  Abonelik planları tablosu; webhook `memberships.valid_until` süresini uzatır.
+  Webhook imzası `hash_equals` ile doğrulanır, aynı bildirim iki kez gelirse
+  abonelik **bir kez** uzar (sağlayıcılar bildirimi tekrar gönderir — bu normaldir).
+- **Ölçülü ödeme duvarı**: ayda N ücretsiz kilitli haber, tek kullanımlık hediye
+  bağlantısı, deneme süresi, yenileme hatırlatması (tek tek, toplu gönderim yok).
+  Sayaç **okurun imzalı çerezinde** durur, sunucuda satır tutulmaz — çerezsiz
+  ziyaretçiyi izlememek için. Karşılığında okur çerezini silerse sayaç sıfırlanır;
+  bilinçli ve belgelenmiş bir sınırdır.
+- **Reklam v2**: gösterim/tıklama sayacı, `ads.txt` yönetimi, **sponsorlu içerik
+  rozeti**, paragraf-içi reklam alanı. Gösterim sunucuda sayılamaz (önbellekten
+  sunulan sayfa PHP'yi hiç çalıştırmaz), bu yüzden çerezsiz bir işaretle sayılır.
+- **Paylaşım metni üretici** (YZ) ve paylaşım görseli şablonu (GD).
+
+### Görünürlük
+- **Çerezsiz kendi analitiği**: günlük toplu okunma, yönlendiren türü ve cihaz
+  sınıfı. **Ham IP saklanmaz**, ham yönlendiren adresi saklanmaz.
+  Panelde 7/30 gün grafiği (dış kütüphane yok), en çok okunanlar, abone hunisi.
+  İsteyen Plausible/Matomo/GA kodunu ayrılan alana yapıştırabilir.
+- **Panel "bekleyen işler" rozetleri** ve dashboard sağlık kartı: cron bayatlığı,
+  disk, veritabanı, yedek yaşı, YZ hata oranı.
+- **Kurulum sonrası kontrol listesi** ve demo verisini temizleme düğmesi.
+
+### SEO ve beslemeler
+- SEO ayar grubu, başlık şablonları, kategori/etiket SEO alanları, editörde
+  SERP/OG önizlemesi, **elle 301 yöneticisi** (hedef yalnız site içi olabilir).
+- **IndexNow ve sitemap bildirimi kuyrukla** çalışır: yayın düğmesine basan
+  editör dış servisi beklemez ve servis çökerse yayın düşmez.
+- Görsel sitemap, JSON Feed, etiket ve yazar beslemeleri, besleme özet/tam ayarı.
+
+### İşletim
+- **Zamanlı ve uzak yedek**: günlük veritabanı, haftalık `uploads` arşivi, saf
+  PHP `ftp_*` ile uzak hedef, tür başına saklama politikası, panelde yedek yaşı.
+- **Bülten çift onayı** (1.0'dan beri `confirmed` sütunu hiç 1 olmuyordu),
+  token'lı çıkış bağlantısı, kategori segmenti, CSV dışa aktarma.
+  Abone listesini indirmek ayrı bir yetki ister ve **denetim kaydına yazılır**.
+
+### Okuma deneyimi
+- **Karanlık mod** beş temada (tam palet: gazete, kâğıt), 3 durumlu: sistem /
+  açık / koyu. Tercih `localStorage`'da, **çerez yok** — sayfa önbelleği korunur.
+- 3 kademeli yazı ölçeği ve `72ch` satır genişliği.
+
+### Düzeltmeler
+- **Abone listesi zayıf yetkiyle indirilebiliyordu.** Eski `newsletter.export`
+  ucu hâlâ kayıtlıydı, abone IP'lerini de veriyor ve denetim kaydı yazmıyordu;
+  yenisinin geçerli olması yalnızca dosya adlarının alfabetik sırasına bağlıydı.
+  Aynı atlama Widget'lar ekranında da vardı. İkisi de kapatıldı.
+- Ölçülü hakla açılan tam metin, önbellekte **paylaşılabiliyordu**; hakkı biten
+  okurun kilitli sayfası da önbelleğe yazılıp hakkı olan okura sunuluyordu.
+- `.rozet-premium` kontrastı 3.25:1 idi (WCAG AA eşiği 4.5:1) → 5.32:1.
+  Karanlık modda ölçülen 13 kontrast kırığı düzeltildi.
+- Zamanlanmış ve sonradan yayımlanan haberler arama motoruna **hiç
+  bildirilmiyordu** (keşif haber kimliğine dayanıyordu, oysa zamanlanmış haberin
+  kimliği yayından günler önce atanır).
+
+### Geliştiriciler için
+- **Genişleme kayıt defterleri** (CONTRACTS §14): `cron_register()`,
+  `admin/settings-groups/*.php`, `manset_feature_modules()` ve kanca noktaları.
+  Yeni bir zamanlı görev ya da ayar grubu eklemek artık çekirdek dosyaya
+  dokunmayı gerektirmiyor.
+- Ayar ekranına `select` ve `secret` alan tipleri. `secret` ekrana basılmaz ve
+  boş gönderim mevcut değeri korur (yoksa her kaydediş API anahtarını silerdi).
+- `tests/probe.php dup_api`: aynı API ucunu iki dosyada tanımlayan çakışmaları
+  arar — `api_register()` sessizce üzerine yazdığı için bu hata görünmezdi.
+- e2e artık kök dizindeki tüm `.php` dosyalarını kopyalar (liste elle sayılmıyor)
+  ve çalışma dizini/geçici dosyaları **porta bağlıdır**; eşzamanlı turlar
+  birbirini bozmuyor.
+
+### Tema sözleşmesi — kırılma notu
+Üçüncü taraf temalar `<html>` üzerinde `data-tema`, `data-goruntu`, `data-olcek`
+özniteliklerini basmalı ve `part('okuma-bas')` ile `part('okuma-ayarlari')`
+kancalarını uygulamalıdır (CONTRACTS §5.5).
+**`<body>`'deki `koyu-mod` sınıfı kaldırıldı** — basılıyordu ama hiçbir CSS
+kullanmıyordu ve yayıncının ayarını yansıtıyordu; karanlık mod artık okurun
+kararıdır. Ona dayanan tema `html[data-goruntu="koyu"]` seçicisine geçmelidir.
+
+
 ## [1.1.0] — "Sağlam zemin"
 
 Bu sürümde **yeni ürün özelliği yok**. 1.0'ın tamamlanmamış kenarları kapatıldı,

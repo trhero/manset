@@ -575,6 +575,35 @@ $gorsel = $v('image');
         <div class="seo-satir"><span class="seo-nokta" data-olcut="spot"></span><span data-metin="spot">Spot metni</span></div>
         <div class="seo-satir"><span class="seo-nokta" data-olcut="etiket"></span><span data-metin="etiket">Etiketler</span></div>
       </div>
+
+      <?php /* SERP / paylaşım önizlemesi (Ajan-E, 1.2-06).
+               Yazar başlığı yazarken Google'da ve paylaşımda ne göreceğini
+               burada görür. Metinler önce tarayıcıda kurulur (anında tepki),
+               sonra `seo.preview` ucundan SUNUCUNUN gerçek çıktısıyla
+               (başlık şablonu + kırpma kuralları) tazelenir. */ ?>
+      <div class="bosluk-ust" id="serpKart" hidden>
+        <div class="kart-baslik">Önizleme</div>
+        <div class="sekmeler" style="margin-bottom:8px">
+          <button type="button" class="etkin" data-onizleme="serp">Google</button>
+          <button type="button" data-onizleme="og">Paylaşım</button>
+        </div>
+
+        <div data-onizleme-govde="serp" style="border:1px solid var(--cizgi,#ddd);border-radius:8px;padding:12px">
+          <div class="mini soluk tek-satir" id="serpUrl"></div>
+          <div id="serpBaslik" style="color:#1a0dab;font-size:17px;line-height:1.3;margin:2px 0 3px"></div>
+          <div class="kucuk" id="serpAcik" style="line-height:1.45"></div>
+        </div>
+
+        <div data-onizleme-govde="og" hidden style="border:1px solid var(--cizgi,#ddd);border-radius:8px;overflow:hidden;max-width:360px">
+          <div id="ogGorsel" style="background:#eee;aspect-ratio:1200/630;background-size:cover;background-position:center"></div>
+          <div style="padding:8px 10px">
+            <div class="mini soluk tek-satir" id="ogAlan"></div>
+            <div style="font-weight:600;line-height:1.3" id="ogBaslik"></div>
+            <div class="kucuk soluk" id="ogAcik" style="line-height:1.4"></div>
+          </div>
+        </div>
+        <span class="form-yardim">Google başlığı ve açıklamayı kendi kurallarıyla kısaltabilir; bu önizleme yaklaşıktır.</span>
+      </div>
     </div>
 
     <div class="kart">
@@ -597,6 +626,9 @@ document.addEventListener('DOMContentLoaded', function () {
   var listeAdres = <?= json_encode(admin_url('posts')) ?>;
   var duzenleSablon = <?= json_encode(admin_url('posts', ['duzenle' => '__ID__'])) ?>;
   var yuklemeKok = (window.MANSET && MANSET.uploads) || '';
+  var siteAdi = <?= json_encode((string)setting('site_title', 'Manşet'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+  var siteKok = <?= json_encode(base_url(), JSON_UNESCAPED_SLASHES) ?>;
+  var haberOnEk = <?= json_encode(rtrim(base_url(), '/') . '/haber/', JSON_UNESCAPED_SLASHES) ?>;
 
   // Üstveri kipinde (posts.seo) gövde kilitlidir: zengin editör hiç bağlanmaz,
   // yoksa contenteditable alan readonly textarea'nın kilidini fiilen deler.
@@ -721,7 +753,56 @@ document.addEventListener('DOMContentLoaded', function () {
     var etiketSayi = elTags.value.split(',').filter(function (t) { return t.trim() !== ''; }).length;
     noktaAyarla('etiket', etiketSayi >= 2 ? 'iyi' : (etiketSayi === 1 ? 'orta' : 'kotu'),
       etiketSayi + ' etiket');
+
+    onizlemeGuncelle(seoBaslik, seoAcik);
   }
+
+  /* ------------------------------------------------ SERP / paylaşım önizlemesi */
+  var serpKart = document.getElementById('serpKart');
+  var onizlemeZaman = null;
+
+  function onizlemeYaz(baslik, acik, tamBaslik) {
+    if (!serpKart) { return; }
+    var slug = (elSlug.value.trim() || slugla(elTitle.value) || 'ornek-adres');
+    document.getElementById('serpUrl').textContent = haberOnEk + slug;
+    document.getElementById('serpBaslik').textContent = tamBaslik || (baslik + ' — ' + siteAdi);
+    document.getElementById('serpAcik').textContent = acik || 'Açıklama girilmedi; spot metni kullanılacak.';
+    document.getElementById('ogAlan').textContent = siteKok.replace(/^https?:\/\//, '');
+    document.getElementById('ogBaslik').textContent = baslik;
+    document.getElementById('ogAcik').textContent = acik;
+    var g = elImage.value ? (yuklemeKok + elImage.value) : '';
+    document.getElementById('ogGorsel').style.backgroundImage = g ? 'url("' + g.replace(/"/g, '%22') + '")' : '';
+  }
+
+  function onizlemeGuncelle(baslik, acik) {
+    if (!serpKart) { return; }
+    serpKart.hidden = (baslik === '');
+    if (baslik === '') { return; }
+    onizlemeYaz(baslik, acik, '');
+    // Sunucudaki GERÇEK çıktıyla tazele: başlık şablonu ve kırpma kuralları
+    // yalnız sunucuda bilinir. Uç yanıt vermezse yerel önizleme kalır.
+    clearTimeout(onizlemeZaman);
+    onizlemeZaman = setTimeout(function () {
+      M.api('seo.preview', {
+        title: elTitle.value, seo_title: elSeoTitle.value, seo_desc: elSeoDesc.value,
+        spot: elSpot.value, slug: elSlug.value
+      }).then(function (r) {
+        if (!r || !r.ok) { return; }
+        onizlemeYaz(r.share_title || baslik, r.description || acik, r.title);
+      }).catch(function () { });
+    }, 700);
+  }
+
+  M.qsa('[data-onizleme]', serpKart || document).forEach(function (dugme) {
+    dugme.addEventListener('click', function () {
+      var hedef = dugme.getAttribute('data-onizleme');
+      M.qsa('[data-onizleme]', serpKart).forEach(function (b) { b.classList.remove('etkin'); });
+      dugme.classList.add('etkin');
+      M.qsa('[data-onizleme-govde]', serpKart).forEach(function (g) {
+        g.hidden = (g.getAttribute('data-onizleme-govde') !== hedef);
+      });
+    });
+  });
 
   [elSpot, elTags, elSeoTitle, elSeoDesc].forEach(function (el) {
     el.addEventListener('input', seoGuncelle);

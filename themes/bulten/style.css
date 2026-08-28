@@ -311,7 +311,10 @@ details.duzeltme summary{cursor:pointer;font-size:13px;letter-spacing:.09em;text
 }
 
 /* Ödeme duvarı rozetleri — liste kartlarında ve haber başlığında */
-.rozet-premium{background:#b8860b;color:#fff;border-radius:3px;padding:1px 6px;font-weight:800;font-size:10px;letter-spacing:.04em}
+/* 1.2-13: #b8860b üzerinde beyaz yazı 3.25:1 idi (10px metin, AA eşiği 4.5).
+   #8a6508 ile 5.32:1. Rozet Ajan-D'nin ödeme duvarı özelliği ama stili bu
+   dosyada duruyor; parts/kilit-kutu.php'ye DOKUNULMADI. */
+.rozet-premium{background:#8a6508;color:#fff;border-radius:3px;padding:1px 6px;font-weight:800;font-size:10px;letter-spacing:.04em}
 .rozet-uye{background:rgba(127,127,127,.18);color:inherit;border-radius:3px;padding:1px 6px;font-weight:700;font-size:10px;letter-spacing:.04em}
 
 /* Kart sertleştirmesi (yerleşim denetimi).
@@ -409,7 +412,9 @@ body.karanlik .icerik-kilit::before{background:linear-gradient(180deg,rgba(17,20
 .icerik-kilit[data-kilit="premium"]{border-top-color:#b8860b}
 .icerik-kilit[data-kilit="premium"] h3::after{
   content:"Abonelere özel";display:block;margin-top:10px;
-  font-family:var(--yazi-govde);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#b8860b;
+  font-family:var(--yazi-govde);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  /* 1.2-13: #b8860b beyaz zeminde 3.25:1 idi; #8a6508 ile 5.32:1. */
+  color:#8a6508;
 }
 
 @media(max-width:640px){
@@ -424,3 +429,153 @@ body.karanlik .icerik-kilit::before{background:linear-gradient(180deg,rgba(17,20
   .icerik-kilit .kilit-eylem .dugme{flex:1 1 100%}
   .paylas-sonuc{margin-left:0;width:100%}
 }
+
+/* ============================================================================
+   OKUMA AYARLARI VE KARANLIK MOD (1.2-13)
+   ----------------------------------------------------------------------------
+   Ayrıntılı gerekçe: themes/gazete/style.css sonundaki aynı başlık.
+   KAPSAM NOTU: GELISTIRME_PLANI.md §3 (1.2-13) tam koyu paleti önce gazete ve
+   kâğıt temalarına veriyor; bülten/gece/yerel için 1.2'de ALTYAPI + asgari
+   değişken seti var (Okur Ö-5c), bileşen taraması 1.3'e ertelendi.
+   Bültende zaten yöneticiye açık bir koyu palet vardı (body.karanlik); burada
+   aynı değerler OKURUN seçimine de bağlanıyor.
+   ============================================================================ */
+
+/* ------------------------------------------------- yazı ölçeği (3 kademe) */
+:root{--okuma-olcek:1}
+html[data-olcek="kucuk"]{--okuma-olcek:.9}
+html[data-olcek="orta"] {--okuma-olcek:1}
+html[data-olcek="buyuk"]{--okuma-olcek:1.18}
+
+/* Satır genişliği: akış sütunu 72ch'i aşmasın (yanlardaki 22px dolgu dâhil). */
+.yazi-govde{font-size:calc(1.03em * var(--okuma-olcek));max-width:min(calc(72ch + 44px), var(--akis))}
+
+/* ------------------------------------------------------- okuma ayarı kutusu */
+/* JavaScript kapalıyken kutu HİÇ gösterilmez: seçim uygulanamayacağı için
+   çalışmayan bir denetim olurdu. İşareti <head> betiği koyar (okuma-bas.php). */
+.okuma-ayar{display:none;position:relative}
+html[data-okuma="1"] .okuma-ayar{display:inline-flex}
+.okuma-ayar-kutu{position:relative}
+.okuma-ayar-kutu>summary{
+  list-style:none;cursor:pointer;-webkit-user-select:none;user-select:none;
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:38px;min-height:32px;padding:2px 10px;
+  border:1px solid var(--renk-cizgi);border-radius:var(--kose);
+  background:var(--renk-yuzey);color:var(--renk-metin);
+  font-size:13px;font-weight:700;line-height:1.2;
+}
+.okuma-ayar-kutu>summary::-webkit-details-marker{display:none}
+.okuma-ayar-kutu>summary:hover{color:var(--renk-vurgu);border-color:var(--renk-vurgu)}
+.okuma-ayar-panel{
+  position:absolute;z-index:70;top:calc(100% + 6px);left:0;min-width:236px;
+  background:var(--renk-yuzey);color:var(--renk-metin);
+  border:1px solid var(--renk-cizgi);box-shadow:0 10px 28px rgba(0,0,0,.14);
+  padding:12px 14px 10px;
+}
+.okuma-ayar-grup{border:0;margin:0 0 10px;padding:0}
+.okuma-ayar-grup legend{padding:0;font-size:11px;font-weight:700;color:var(--renk-soluk);
+  text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.okuma-ayar-secenek{display:flex;gap:6px;flex-wrap:wrap}
+.okuma-ayar-secenek label{
+  display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+  border:1px solid var(--renk-cizgi);border-radius:var(--kose);padding:6px 11px;
+  font-size:13px;font-weight:600;line-height:1.3;min-height:32px;
+}
+.okuma-ayar-secenek input{margin:0;accent-color:var(--renk-vurgu)}
+.okuma-ayar-secenek input:checked+span{color:var(--renk-vurgu)}
+.okuma-ayar-not{margin:0;font-size:11.5px;line-height:1.45;color:var(--renk-soluk)}
+.alt-okuma{margin:0 0 14px}
+.alt-okuma .okuma-ayar-panel{top:auto;bottom:calc(100% + 6px)}
+/* Dar ekranda panel alttan açılan bir levha olur. NEDEN: 420px'te düğme meta
+   satırının solunda duruyor; sağa hizalı mutlak panel viewport'un SOLUNDAN
+   92px taşıyordu (ölçüldü). Sabit konumda taşma matematiksel olarak imkânsız. */
+@media(max-width:560px){
+  .okuma-ayar-panel{
+    position:fixed;left:12px;right:12px;top:auto;bottom:12px;
+    width:auto;min-width:0;z-index:120;
+  }
+  .alt-okuma .okuma-ayar-panel{top:auto;bottom:12px}
+}
+@media print{.okuma-ayar{display:none!important}}
+
+/* ============================================================ KOYU PALET */
+/* Ölçülen kontrast oranları (WCAG 2.1, normal metin eşiği 4.5:1):
+     metin #eceff3 / zemin #111417 ....... 16.02
+     metin #eceff3 / yüzey #171b1f ....... 15.01
+     soluk #a3adb9 / yüzey #171b1f ........ 7.61
+     vurgu #d6a078 / yüzey #171b1f ........ 7.55  (color-mix yedeği)
+   NEDEN burada --renk-vurgu EZİLİYOR (gazete/kâğıtta ezilmiyordu): bültende
+   vurgu rengi 20 yerde METİN, yalnız 1 yerde ZEMİN olarak kullanılıyor. Metin
+   yönünü açmak, tek zemin kullanımını eski değere geri vermekten daha ucuz ve
+   daha az kural gerektiriyor. */
+html[data-goruntu="koyu"]{color-scheme:dark}
+html[data-goruntu="acik"]{color-scheme:light}
+
+/* Özgün vurgu tonu <html> üzerinde saklanır, açılmış ton <body>'de tanımlanır.
+   Aynı kural bloğunda hem okuyup hem yazsaydık var() kendi yeni değerini
+   görürdü; iki ayrı öge bunu ayırıyor. */
+html[data-goruntu="koyu"]{--renk-vurgu-zemin:var(--renk-vurgu)}
+html[data-goruntu="koyu"] body{
+  --renk-zemin:#111417;
+  --renk-yuzey:#171b1f;
+  --renk-metin:#eceff3;
+  --renk-soluk:#a3adb9;
+  --renk-cizgi:#2b3138;
+  --renk-vurgu:#d6a078;
+}
+@supports (color: color-mix(in srgb, red 50%, white)){
+  html[data-goruntu="koyu"] body{
+    --renk-vurgu:color-mix(in srgb, var(--renk-vurgu-zemin) 55%, #ffffff);
+  }
+}
+/* Vurgunun ZEMİN olduğu tek yer eski tonunda kalır (beyaz yazı okunur olsun). */
+html[data-goruntu="koyu"] .kaydet-dugme.kayitli{
+  background:var(--renk-vurgu-zemin);border-color:var(--renk-vurgu-zemin);color:#fff;
+}
+/* --renk-ana bültende neredeyse siyah bir mürekkep tonu; koyu modda metin rengi olur. */
+html[data-goruntu="koyu"] .logo-metin{color:var(--renk-metin)}
+html[data-goruntu="koyu"] .veri-liste .ek.yukari{color:#7ee2a8}
+html[data-goruntu="koyu"] .veri-liste .ek.asagi{color:#ff9b90}
+html[data-goruntu="koyu"] .form-sonuc.ok{color:#7ee2a8}
+html[data-goruntu="koyu"] .form-sonuc.err{color:#ff9b90}
+html[data-goruntu="koyu"] .icerik-kilit::before{
+  background:linear-gradient(180deg,rgba(17,20,23,0),var(--renk-zemin));
+}
+html[data-goruntu="koyu"] .okuma-ayar-panel{box-shadow:0 10px 28px rgba(0,0,0,.55)}
+
+/* JavaScript kapalıyken sistem tercihi yine de okunsun: yalnız DEĞİŞKENLER. */
+@media (prefers-color-scheme: dark){
+  html[data-tema="sistem"]{color-scheme:dark}
+  html[data-tema="sistem"] body{
+    --renk-zemin:#111417; --renk-yuzey:#171b1f; --renk-metin:#eceff3;
+    --renk-soluk:#a3adb9; --renk-cizgi:#2b3138;
+  }
+}
+
+@media print{
+  :root{--okuma-olcek:1}
+  .yazi-govde{max-width:none}
+}
+
+/* Hareketi azalt: görünüm/ölçek değiştirirken geçiş animasyonu olmasın.
+   NEDEN: kart başlıklarında `transition:color`, kart görsellerinde
+   `transition:transform/opacity` var; koyu moda geçiş bunları hep birden
+   tetikliyor ve hareketten rahatsız olan okur için ekran "dalgalanıyor".
+   Projede aynı saygı manşet şeridinde de gösteriliyor. */
+@media (prefers-reduced-motion: reduce){
+  .kart-baslik,.kart-gorsel img,.kart,.kart-bag,.ana-menu,
+  .kaydet-dugme,.paylas-dugme,.dugme,
+  .okuma-ayar-kutu>summary,.okuma-ayar-secenek label{
+    transition:none!important;
+    animation:none!important;
+  }
+}
+
+/* Odak halkası: bültende genel bir :focus-visible kuralı YOKTU; okuma ayarı
+   kutusu klavyeyle kullanılacağı için diğer dört temayla eşitlendi. */
+:focus-visible{outline:2px solid var(--renk-vurgu);outline-offset:2px}
+
+/* Premium kilit etiketi koyu zeminde de okunur kalmalı:
+   #8a6508 / #171b1f = 1.65 (kalırdı) · #d9a93f / #171b1f = 7.99. */
+html[data-goruntu="koyu"] .icerik-kilit[data-kilit="premium"] h3::after{color:#d9a93f}
+html[data-goruntu="koyu"] .icerik-kilit[data-kilit="premium"]{border-top-color:#d9a93f}

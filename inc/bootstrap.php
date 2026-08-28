@@ -7,7 +7,7 @@
 
 if (defined('MANSET_BOOTSTRAPPED')) { return; }
 define('MANSET_BOOTSTRAPPED', true);
-define('MANSET_VERSION', '1.1.0');
+define('MANSET_VERSION', '1.2.0');
 define('ROOT_DIR', dirname(__DIR__));
 define('INC_DIR', ROOT_DIR . '/inc');
 define('DB_DIR', ROOT_DIR . '/db');
@@ -172,12 +172,101 @@ function db_update($table, array $data, $where, array $whereParams = []) {
 
 // ---------------------------------------------------------------- ayarlar
 /** settings tablosunu tek seferde belleğe alır. */
+/**
+ * SIRLARIN DİNLENME HÂLİNDE ŞİFRELENMESİ (denetim turu 4, YÜKSEK-1)
+ * ---------------------------------------------------------------------------
+ * 1.2'ye kadar API anahtarları `settings` tablosunda düz metin duruyordu ve bu
+ * savunulabilirdi: veritabanına erişen zaten her şeye erişiyordu.
+ *
+ * 1.2 bunu değiştirdi. Zamanlı uzak yedek (1.2-09) veritabanını DÜZENLİ OLARAK
+ * ÜÇÜNCÜ TARAF BİR FTP SUNUCUSUNA gönderiyor. Denetçi gerçek bir yedek alıp
+ * içinden ödeme sağlayıcı tuzunu okudu ve o tuzla GEÇERLİ İMZALI sahte bir
+ * ödeme bildirimi üretip bekleyen bir ödemeyi "ödendi" yaptırdı. Yani özelliğin
+ * kendisi sızıntının yarıçapını büyütüyordu.
+ *
+ * KAZANCIN SINIRI DÜRÜSTÇE: anahtar `config.php` içindeki `app_key`'dir ve o
+ * DOSYADIR, veritabanında değildir — yedeğe girmez (ölçüldü). Yani bu şifreleme
+ * "yalnızca veritabanı/yedek sızdı" durumunda korur. Saldırgan dosyaları da ele
+ * geçirdiyse anahtar da onundur ve şifreleme bir şey kazandırmaz. 1.2 ile en
+ * olası senaryo tam olarak birincisidir.
+ *
+ * ÇÖZÜM YAZMA DEĞİL OKUMA TARAFINDA SAYDAM: `setting()` işaretli değeri
+ * kendiliğinden çözer. Böylece anahtarı okuyan onlarca çağrı yerinde kalır;
+ * her birini tek tek değiştirmek, birini atlayıp sessizce bozmak demekti.
+ */
+
+/** Şifrelenmiş değerin başındaki işaret. */
+function setting_secret_marker() { return 'enc:v1:'; }
+
+/** Bu anahtar bir sır mı? (yazarken şifrelenir) */
+function setting_is_secret($key) {
+    $key = (string)$key;
+    // Ayarlar ekranındaki `secret` tipli alanlar buraya düşer. Desen tabanlı,
+    // çünkü sağlayıcı anahtarları eklendikçe liste elle güncellenmeyi unutur —
+    // ve unutulan bir anahtar sessizce düz metin kalırdı.
+    foreach (['_key', '_pass', '_secret', '_salt', '_token'] as $sonek) {
+        if (substr($key, -strlen($sonek)) === $sonek) { return true; }
+    }
+    return false;
+}
+
+/** Şifreleme kullanılabilir mi? (openssl + app_key) */
+function setting_secret_ready() {
+    static $hazir = null;
+    if ($hazir !== null) { return $hazir; }
+    return $hazir = (function_exists('openssl_encrypt')
+        && in_array('aes-256-gcm', array_map('strtolower', (array)openssl_get_cipher_methods()), true)
+        && (string)cfg('app_key', '') !== '');
+}
+
+/** app_key'den türetilen 32 baytlık şifreleme anahtarı. */
+function setting_secret_key() {
+    return hash('sha256', 'manset-setting-v1|' . (string)cfg('app_key', ''), true);
+}
+
+/** Değeri şifreler. Şifreleme yoksa DEĞERİ OLDUĞU GİBİ döndürür (sessizce kaybetmez). */
+function setting_secret_encode($plain) {
+    $plain = (string)$plain;
+    if ($plain === '' || !setting_secret_ready()) { return $plain; }
+    // Zaten şifreliyse tekrar şifreleme (çift kodlama veriyi kurtarılamaz yapar).
+    if (strpos($plain, setting_secret_marker()) === 0) { return $plain; }
+    $iv = random_bytes(12);
+    $etiket = '';
+    $sifreli = openssl_encrypt($plain, 'aes-256-gcm', setting_secret_key(), OPENSSL_RAW_DATA, $iv, $etiket);
+    if ($sifreli === false) { return $plain; }
+    return setting_secret_marker() . base64_encode($iv . $etiket . $sifreli);
+}
+
+/** İşaretliyse çözer, değilse olduğu gibi döndürür (eski düz metin değerler çalışmaya devam eder). */
+function setting_secret_decode($value) {
+    $value = (string)$value;
+    $isaret = setting_secret_marker();
+    if (strpos($value, $isaret) !== 0) { return $value; }
+    if (!setting_secret_ready()) {
+        // Anahtar yok ama değer şifreli: BOŞ dönmek "anahtar tanımlı değil" gibi
+        // görünür ve yayıncı yenisini girip eskisini kalıcı olarak kaybeder.
+        log_error('Şifreli ayar çözülemedi: app_key ya da openssl yok.');
+        return '';
+    }
+    $ham = base64_decode(substr($value, strlen($isaret)), true);
+    if ($ham === false || strlen($ham) < 29) { return ''; }
+    $iv = substr($ham, 0, 12);
+    $etiket = substr($ham, 12, 16);
+    $govde = substr($ham, 28);
+    $cozulen = openssl_decrypt($govde, 'aes-256-gcm', setting_secret_key(), OPENSSL_RAW_DATA, $iv, $etiket);
+    return $cozulen === false ? '' : $cozulen;
+}
+
 function settings_all($reload = false) {
     static $cacheSettings = null;
     if ($cacheSettings === null || $reload) {
         $cacheSettings = [];
         try {
-            foreach (qa('SELECT skey, sval FROM settings') as $r) { $cacheSettings[$r['skey']] = $r['sval']; }
+            foreach (qa('SELECT skey, sval FROM settings') as $r) {
+                // Çözme OKUMA tarafında ve saydam: anahtarı okuyan çağrılar
+                // değişmeden çalışır.
+                $cacheSettings[$r['skey']] = setting_secret_decode($r['sval']);
+            }
         } catch (Throwable $e) { $cacheSettings = []; }
     }
     return $cacheSettings;
@@ -189,6 +278,8 @@ function setting($key, $default = '') {
 }
 /** Ayar yazar (upsert) ve bellek kopyasını tazeler. */
 function setting_set($key, $value) {
+    // Sır niteliğindeki anahtarlar DİSKE şifreli yazılır (yukarıdaki açıklama).
+    if (setting_is_secret($key)) { $value = setting_secret_encode($value); }
     $exists = qv('SELECT 1 FROM settings WHERE skey = :k', [':k' => $key]);
     if ($exists) { q('UPDATE settings SET sval = :v WHERE skey = :k', [':v' => (string)$value, ':k' => $key]); }
     else { q('INSERT INTO settings (skey, sval) VALUES (:k, :v)', [':k' => $key, ':v' => (string)$value]); }
@@ -603,6 +694,57 @@ function trash_filter_sql($alias = 'p') {
     if (!$var) { return ''; }
     $on = $alias !== '' ? $alias . '.' : '';
     return " AND " . $on . "deleted_at = ''";
+}
+
+/**
+ * Cron görev kaydı.
+ *
+ * cron.php'deki sabit liste çekirdeğin altı görevini tutar; modüller kendi
+ * görevlerini YÜKLENİRKEN buraya bildirir. Böylece yeni bir zamanlı iş eklemek
+ * cron.php'ye dokunmayı gerektirmez — birden çok iş akışı aynı anda görev
+ * ekleyebilir.
+ *
+ * @param string $ad    Görev anahtarı (cron_runs.task ve 'sadece' filtresinde geçer).
+ * @param string $fn    Çağrılacak işlev adı.
+ * @param bool   $ucuz  Ağa çıkmıyor, ücret üretmiyor, milisaniyeler sürüyorsa true.
+ *                      Yalnız ucuz görevler bağlantı kapatamayan SAPI'lerde çalışır.
+ */
+function cron_register($ad, $fn, $ucuz = false) {
+    if (!isset($GLOBALS['manset_cron_tasks'])) { $GLOBALS['manset_cron_tasks'] = []; }
+    $GLOBALS['manset_cron_tasks'][(string)$ad] = ['fn' => (string)$fn, 'ucuz' => (bool)$ucuz];
+}
+
+/** Kayıtlı modül görevleri: ad => ['fn'=>…, 'ucuz'=>bool]. */
+function cron_registered_tasks() {
+    return isset($GLOBALS['manset_cron_tasks']) ? (array)$GLOBALS['manset_cron_tasks'] : [];
+}
+
+/**
+ * 1.2 ile gelen özellik modülleri.
+ *
+ * NEDEN TEK KAYNAK: bu modüller kancalarını (`ads_slot_decorate`,
+ * `analytics_record_view`, `paywall_allow`, `cron_register`) YÜKLENDİKLERİNDE
+ * tanımlar. Yani yüklenmeyen modülün kancası sessizce hiç çalışmaz — hata da
+ * vermez, çünkü kanca `function_exists()` ile korunuyor.
+ *
+ * 1.2 geliştirmesinde bu tam iki kez oldu: `api.php` analitik modülünü
+ * yüklemiyordu (hiçbir ziyaret kaydedilmedi) ve `index.php` reklam modülünü
+ * yüklemiyordu (gösterim sayacı ön yüzde hiç çalışmadı). İkisi de kod okunarak
+ * görünmüyordu; canlı ölçümle bulundu.
+ *
+ * Dört giriş noktası (index.php, api.php, cron.php, admin/index.php) artık
+ * AYNI listeyi okur. Yeni modül eklerken tek yer değişir.
+ */
+function manset_feature_modules() {
+    return ['analytics', 'ads', 'payment', 'paywall', 'newsletter'];
+}
+
+/** Özellik modüllerini yükler (dosya yoksa sessizce atlanır). */
+function manset_load_feature_modules() {
+    foreach (manset_feature_modules() as $mod) {
+        $f = INC_DIR . '/' . $mod . '.php';
+        if (is_file($f)) { require_once $f; }
+    }
 }
 
 // ---------------------------------------------------------------- yükseltme

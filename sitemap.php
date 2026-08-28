@@ -98,6 +98,27 @@ function sitemap_url_node($loc, $lastmod = '', $changefreq = '', $priority = '')
     return $s . '</url>' . "\n";
 }
 
+/**
+ * Haberin görsel düğümü (`image:image`).
+ *
+ * Google Görseller ve Keşfet için haber haritasındaki tek güçlü sinyal budur;
+ * 1.1'e kadar hiç basılmıyordu. Haber başına YALNIZ ÖNE ÇIKAN görsel yazılır:
+ * gövdedeki görselleri de eklemek harita boyutunu birkaç katına çıkarır ve
+ * Google zaten sayfayı taradığında onları görür.
+ *
+ * @return string boş görselde boş dize
+ */
+function sitemap_image_node($row) {
+    if (!function_exists('seo_sitemap_images_enabled') || !seo_sitemap_images_enabled()) { return ''; }
+    if (trim((string)arr($row, 'image', '')) === '') { return ''; }
+    $url = post_image($row, 'large');
+    if ($url === '') { return ''; }
+    $s = '<image:image><image:loc>' . sitemap_x($url) . '</image:loc>';
+    $baslik = trim((string)arr($row, 'title', ''));
+    if ($baslik !== '') { $s .= '<image:title>' . sitemap_x($baslik) . '</image:title>'; }
+    return $s . '</image:image>';
+}
+
 /** 'Y-m-d H:i:s' → W3C tarih biçimi. */
 function sitemap_date($dt) {
     if (!$dt) { return ''; }
@@ -170,7 +191,8 @@ function sitemap_render_posts($page) {
 
     sitemap_headers();
     sitemap_out('<?xml version="1.0" encoding="UTF-8"?>' . "\n"
-        . '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' . "\n");
+        . '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"' . "\n"
+        . '        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">' . "\n");
 
     $remaining = min(sitemap_page_size(), max(0, $total - $offset));
     $chunk = sitemap_chunk_size();
@@ -179,7 +201,7 @@ function sitemap_render_posts($page) {
     while ($remaining > 0) {
         $take = min($chunk, $remaining);
         // id sırası kararlıdır: LIMIT/OFFSET sayfalamasında satır kaymaz.
-        $rows = qa('SELECT p.id, p.slug, p.published_at, p.updated_at
+        $rows = qa('SELECT p.id, p.slug, p.title, p.image, p.published_at, p.updated_at
                     FROM posts p WHERE ' . $where . '
                     ORDER BY p.id ASC LIMIT ' . (int)$take . ' OFFSET ' . (int)$offset,
             [':nowts' => now()]);
@@ -187,7 +209,11 @@ function sitemap_render_posts($page) {
         foreach ($rows as $r) {
             list($freq, $prio) = sitemap_freshness(arr($r, 'published_at', ''));
             $lastmod = sitemap_date(arr($r, 'updated_at', '') ?: arr($r, 'published_at', ''));
-            sitemap_out(sitemap_url_node(url_post($r), $lastmod, $freq, $prio));
+            $node = sitemap_url_node(url_post($r), $lastmod, $freq, $prio);
+            $img = sitemap_image_node($r);
+            // Görsel düğümü </url>'den ÖNCE girmeli (şema sırası).
+            if ($img !== '') { $node = str_replace('</url>', $img . '</url>', $node); }
+            sitemap_out($node);
         }
         $got = count($rows);
         $offset += $got;
@@ -291,7 +317,8 @@ function sitemap_render_news() {
     sitemap_headers();
     sitemap_out('<?xml version="1.0" encoding="UTF-8"?>' . "\n"
         . '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"' . "\n"
-        . '        xmlns:news="http://www.google.com/schemas/sitemap-news/0.9">' . "\n");
+        . '        xmlns:news="http://www.google.com/schemas/sitemap-news/0.9"' . "\n"
+        . '        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">' . "\n");
 
     $siteName = sitemap_x((string)site('title'));
     $since = date('Y-m-d H:i:s', time() - 48 * 3600);
@@ -303,7 +330,7 @@ function sitemap_render_news() {
 
     while ($left > 0) {
         $take = min($chunk, $left);
-        $rows = qa('SELECT p.id, p.slug, p.title, p.published_at
+        $rows = qa('SELECT p.id, p.slug, p.title, p.image, p.published_at
                     FROM posts p WHERE ' . $where . ' AND p.published_at >= :since
                     ORDER BY p.published_at DESC, p.id DESC LIMIT ' . (int)$take . ' OFFSET ' . (int)$offset,
             [':nowts' => now(), ':since' => $since]);
@@ -316,7 +343,7 @@ function sitemap_render_news() {
                 . '<news:language>tr</news:language></news:publication>'
                 . ($date !== '' ? '<news:publication_date>' . sitemap_x($date) . '</news:publication_date>' : '')
                 . '<news:title>' . sitemap_x((string)arr($r, 'title', '')) . '</news:title>'
-                . '</news:news></url>' . "\n");
+                . '</news:news>' . sitemap_image_node($r) . '</url>' . "\n");
         }
         $got = count($rows);
         $offset += $got;

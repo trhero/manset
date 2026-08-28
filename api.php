@@ -15,7 +15,8 @@ require_once __DIR__ . '/inc/view.php';
 require_once __DIR__ . '/inc/sanitize.php';
 // Uç noktaların ihtiyaç duyduğu iş modülleri (varsa) yüklenir.
 // Örn. posts.save içinden seo_remember_slug(), media.upload içinden media_save_upload().
-foreach (['seo', 'media', 'kunye', 'widgets', 'rss', 'ai_jobs', 'members'] as $mansetModule) {
+foreach (array_merge(['seo', 'media', 'kunye', 'widgets', 'rss', 'ai_jobs', 'members'],
+                     manset_feature_modules()) as $mansetModule) {
     $mansetModuleFile = __DIR__ . '/inc/' . $mansetModule . '.php';
     if (is_file($mansetModuleFile)) { require_once $mansetModuleFile; }
 }

@@ -31,6 +31,23 @@ if (is_file(__DIR__ . '/inc/kunye.php'))   { require_once __DIR__ . '/inc/kunye.
 if (is_file(__DIR__ . '/inc/members.php')) { require_once __DIR__ . '/inc/members.php'; }
 if (is_file(__DIR__ . '/inc/roles.php'))   { require_once __DIR__ . '/inc/roles.php'; }
 
+// 1.2 ÖZELLİK MODÜLLERİ — kancaları burada tanımlanır (reklam sayacı, okunma
+// kaydı, ödeme duvarı). Yüklenmezlerse kancalar sessizce hiç çalışmaz.
+// Liste inc/bootstrap.php'de TEK yerde durur; dört giriş noktası da onu okur.
+// Modüller OTURUM AÇMAZ — ön yüz çerez kuralı (CONTRACTS §3.1) korunur.
+manset_load_feature_modules();
+
+// SEO ÖN YÜZ KAPISI (1.2): elle tanımlı 301/302/410 kuralları ve IndexNow
+// anahtar dosyası. Yönlendirme çözülmeden ve sayfa önbelleği okunmadan ÖNCE
+// çalışmalı — yoksa taşınmış bir adres için önbellekten eski sayfa sunulur.
+//
+// Çağrı BURADA, açıkça yapılıyor. Ajan-E bunu geçici olarak inc/seo.php'nin
+// YÜKLENME anına bağlamıştı (o dosya kendisinin, index.php değil). Yükleme
+// anında yan etkisi olan bir modül, aynı dosyayı require eden api.php/cron.php/
+// admin panelinde de sessizce çalışır; bugün bir koruma bunu engelliyor olsa
+// bile o koruma tek bir yeniden düzenlemeyle kaybolur. Kapı yalnız burada.
+if (function_exists('seo_front_gate')) { seo_front_gate(); }
+
 /**
  * İstek yolunu çözer.
  * Öncelik: ?r= parametresi → PATH_INFO → REQUEST_URI (taban klasör çıkarılarak)
@@ -145,6 +162,11 @@ switch ($head) {
         // Neden: post_register_view() oturum açar; her anonim ziyaretçiye çerez
         // verilseydi haber sayfaları hiçbir zaman önbelleğe alınamazdı. Ayrıca
         // JS çalıştırmayan botlar sayaca girmiyor (BİK teknik esasları §5).
+        // ÖLÇÜLÜ ÖDEME DUVARI (1.2-05): karar ÇIKTIDAN ÖNCE verilmeli.
+        // Sayaç çerezi ve `private, no-store` başlığı yalnız burada yazılabilir;
+        // şablonun içinde headers_sent() true olur, başlık sessizce düşer ve
+        // karar kilide döner — okur hakkı olduğu halde duvara çarpar.
+        if (function_exists('paywall_front_gate')) { paywall_front_gate($post); }
         render('single', [
             'post'     => $post,
             'related'  => related_posts($post, 4),
@@ -270,6 +292,18 @@ switch ($head) {
     case 'sitemap.xml':
         header('Location: ' . site_path() . '/sitemap.php', true, 301);
         exit;
+
+    // ads.txt reklam ağlarınca site KÖKÜNDEN istenir (IAB kuralı); alt yola
+    // taşınamaz. mod_rewrite kapalı kurulumlarda ve nginx/IIS'te bu yedek yol
+    // olmadan dosya hiç sunulmaz.
+    case 'ads.txt':
+        if (is_file(__DIR__ . '/ads.txt.php')) { require __DIR__ . '/ads.txt.php'; exit; }
+        break;
+
+    case 'feed.json':
+        // feed.php biçim parametresini KENDİSİ kurar; buradan bir şey geçirilmez.
+        if (is_file(__DIR__ . '/feed.php')) { require __DIR__ . '/feed.php'; exit; }
+        break;
 
     case 'robots.txt':
         header('Content-Type: text/plain; charset=utf-8');

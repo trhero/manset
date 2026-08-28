@@ -518,6 +518,16 @@ api_register('posts.save', function () {
     }
 
     api_admin_flush();
+
+    // ARAMA MOTORU BİLDİRİMİ (1.2-07): haber ŞU AN yayında ise adresi kuyruğa gir.
+    // cron keşfi `posts.id` su işaretine bakıyor; var olan bir taslak yayına
+    // alındığında id DEĞİŞMEDİĞİ için o keşif onu hiç görmez. Kuyruk zaten
+    // yinelenen adresi elediği için buradan gelen fazladan çağrı zararsızdır —
+    // yayın akışı beklemiyor, yalnızca satır yazılıyor.
+    if ($status === 'published' && function_exists('seo_ping_enqueue')) {
+        seo_ping_enqueue(url_post(['id' => (int)$id, 'slug' => $slug]), 'indexnow');
+    }
+
     return [
         'id'           => (int)$id,
         'slug'         => $slug,
@@ -648,6 +658,11 @@ api_register('posts.bulk', function () {
         $set = ['status' => $new, 'updated_at' => now()];
         if ($new === 'published' && (string)arr($post, 'published_at', '') === '') { $set['published_at'] = now(); }
         db_update('posts', $set, 'id = :id', [':id' => (int)$post['id']]);
+        // Eski bir taslak yayına alındığında id'si su işaretinin altında kalır ve
+        // cron keşfi onu görmez (bkz. cron_publish_scheduled'daki aynı gerekçe).
+        if ($new === 'published' && function_exists('seo_ping_enqueue') && function_exists('url_post')) {
+            seo_ping_enqueue(url_post($post), 'indexnow');
+        }
         $count++;
     }
 

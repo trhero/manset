@@ -22,6 +22,10 @@ if (!defined('MANSET_BOOTSTRAPPED')) { exit; }
       <?php if (site('email')): ?><a href="mailto:<?= esc(site('email')) ?>"><?= esc(site('email')) ?></a><?php endif; ?>
     </nav>
 
+    <?php /* Okuma ayarları her sayfada erişilebilir olsun diye alt bilgide de basılır
+             (1.2-13). Beş temada da aynı parça; tema seçimi bu özelliği düşürmez. */ ?>
+    <div class="alt-okuma"><?php part('okuma-ayarlari', ['yer' => 'alt']); ?></div>
+
     <p class="telif">© <?= esc(site('year')) ?> <?= esc(site('title')) ?>. Tüm hakları saklıdır.
       <span class="uretici">Manşet ile hazırlandı.</span></p>
   </div>

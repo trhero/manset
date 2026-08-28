@@ -14,6 +14,8 @@
  *   php tests/probe.php <kök> pw_stamp_binds
  *   php tests/probe.php <kök> rate_limit_order
  *   php tests/probe.php <kök> srcset_gate
+ *   php tests/probe.php <kök> dup_api
+ *   php tests/probe.php <kök> backup_secret
  *
  * NEDEN AYRI BETİK: kabuktan `php -r` ile kod göndermek Git Bash'te kırılgan —
  * MSYS yol dönüşümü yalnız ARGÜMAN konumundaki yolları çevirir, kod dizesinin
@@ -182,6 +184,67 @@ switch ($soru) {
         $kirli = '<img src="/a.png" srcset="java' . chr(9) . 'script:alert(1) 2x">';
         $temiz = sanitize_html($kirli, true);
         echo (stripos((string)$temiz, 'srcset') === false) ? 'TAMAM' : 'KAPI_OLU';
+        break;
+
+    case 'dup_api':
+        // AYNI UÇ NOKTA İKİ KEZ KAYDEDİLMİŞ Mİ?
+        //
+        // api_register() aynı anahtarı SESSİZCE üzerine yazar ve api.php
+        // inc/api/*.php dosyalarını ALFABETİK yükler. Yani iki dosya aynı ucu
+        // kaydettiğinde hangisinin geçerli olduğu yalnız DOSYA ADINA bağlıdır.
+        //
+        // Bu 1.2'de gerçekten oldu: eski `newsletter.export` (izin
+        // `settings.manage`, abone IP'sini de veren, denetim kaydı YAZMAYAN
+        // sürüm) `kunye_api.php` içinde duruyordu; yeni ve KVKK kapılı sürümün
+        // kazanması yalnızca "kunye_api" < "newsletter_api" sıralamasındandı.
+        // Bir dosya yeniden adlandırılsa kapı sessizce geri alınırdı.
+        //
+        // Kayıtları ÇALIŞTIRMADAN, metinden okuruz: amaç çakışmayı yüklemeden
+        // önce görmek.
+        $gorulen = [];
+        $cift = [];
+        foreach ((array)glob($root . '/inc/api/*.php') as $dosya) {
+            $metin = (string)file_get_contents($dosya);
+            if (preg_match_all('/api_register\(\s*.([a-z0-9_]+\.[a-z0-9_]+)./i', $metin, $m)) {
+                foreach ($m[1] as $uc) {
+                    if (isset($gorulen[$uc])) {
+                        $cift[] = $uc . ' (' . basename($gorulen[$uc]) . ' + ' . basename($dosya) . ')';
+                    } else {
+                        $gorulen[$uc] = $dosya;
+                    }
+                }
+            }
+        }
+        echo implode("
+", array_unique($cift));
+        break;
+
+    case 'backup_secret':
+        // SIRLAR YEDEKTE DÜZ METİN DURUYOR MU? (denetim turu 4, YÜKSEK-1)
+        //
+        // 1.2 ile gelen zamanlı uzak yedek veritabanını üçüncü taraf bir FTP
+        // sunucusuna gönderiyor. Denetçi gerçek bir yedekten ödeme sağlayıcı
+        // tuzunu okudu ve onunla GEÇERLİ İMZALI sahte bir ödeme bildirimi
+        // üretip bekleyen bir ödemeyi "ödendi" yaptırdı.
+        //
+        // Kazancın sınırı: anahtar `config.php` içindeki `app_key`'dir ve
+        // yedeğe GİRMEZ. Yani koruma "yalnız veritabanı sızdı" durumunda
+        // gerçektir — 1.2 ile en olası senaryo tam olarak budur.
+        require_once $root . '/inc/backup.php';
+        $sir = 'SONDA-DUZ-METIN-SIRRI-' . bin2hex(random_bytes(4));
+        setting_set('ai_api_key', $sir);
+
+        $r = backup_create('sqlite');
+        if (empty($r['ok']) || !is_file($r['path'])) { echo 'YEDEK_ALINAMADI'; break; }
+
+        $ham = (string)file_get_contents($r['path']);
+        @unlink($r['path']);
+
+        if (strpos($ham, $sir) !== false) { echo 'DUZ_METIN'; break; }
+        // Şifreli olması yetmez: uygulama onu OKUYABİLMELİ de. Okunamayan bir
+        // anahtar "korumalı" değil, kayıptır.
+        settings_all(true);
+        echo (setting('ai_api_key') === $sir) ? 'TAMAM' : 'COZULEMEDI';
         break;
 
     default:

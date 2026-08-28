@@ -18,6 +18,53 @@ $backupInfo = function_exists('backup_supported')
 $mediaStats = function_exists('media_storage_stats') ? media_storage_stats() : null;
 $driver = db_driver();
 $yedekVar = ($driver === 'sqlite' ? !empty($backupInfo['sqlite']) : !empty($backupInfo['mysql']));
+
+/* ------------------------------------------------------------------ 1.2-09
+ * Zamanlı ve uzak yedek — durum ve iki elle tetikleme.
+ *
+ * NEDEN BURADA POST: `backup.*` uç ad alanı Ajan-10'a aittir (CONTRACTS §7) ve
+ * `inc/api/tools.php` bana ait değil. Yeni uç eklemek yerine, panel sayfası
+ * sözleşmesinin izin verdiği yerde (sayfa POST'u, admin/index.php ob_start
+ * tamponunda) çalıştırıyoruz. CSRF denetimi elle yapılır.
+ */
+$yedekYas   = function_exists('backup_age_text') ? backup_age_text('db') : '';
+$yedekTon   = function_exists('backup_age_tone') ? backup_age_tone('db') : 'notr';
+$arsivYas   = function_exists('backup_age_text') ? backup_age_text('uploads') : '';
+$arsivTon   = function_exists('backup_age_tone') ? backup_age_tone('uploads') : 'notr';
+$ftpDurum   = function_exists('backup_ftp_status') ? backup_ftp_status() : ['ok' => false, 'reason' => ''];
+$arsivDurum = function_exists('backup_uploads_state') ? backup_uploads_state() : null;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (string)inp('yedek_eylem', '') !== '') {
+    csrf_guard();
+    $eylem = (string)inp_s('yedek_eylem', '');
+
+    if ($eylem === 'uploads' && function_exists('backup_uploads_tick')) {
+        // Panel isteği bekletilmesin: en çok 15 sn çalışır, kaldığı yerden devam eder.
+        $r = backup_uploads_tick(15);
+        if (!$r['ok']) {
+            flash('err', 'Arşiv alınamadı: ' . $r['error']);
+        } elseif ($r['done'] && $r['filename'] !== '') {
+            setting_set('backup_last_uploads', now());
+            flash('ok', 'uploads arşivi tamamlandı: ' . $r['filename']);
+        } elseif ($r['done']) {
+            flash('warn', (string)$r['error']);
+        } else {
+            flash('warn', (int)$r['written'] . ' dosya arşivlendi, ' . (int)$r['remaining']
+                . ' dosya kaldı. Düğmeye yeniden basın ya da cron turunu bekleyin.');
+        }
+    } elseif ($eylem === 'uzak' && function_exists('backup_remote_send')) {
+        $son = function_exists('backup_latest') ? backup_latest('db') : null;
+        if (!$son) {
+            flash('err', 'Önce bir veritabanı yedeği alın.');
+        } else {
+            $r = backup_remote_send($son['filename']);
+            if ($r['ok']) { flash('ok', 'Uzak sunucuya gönderildi: ' . $r['remote']); }
+            else { flash('err', 'Uzak gönderim başarısız: ' . $r['error']); }
+        }
+    }
+    header('Location: ' . admin_url('tools'), true, 302);
+    exit;
+}
 ?>
 
 <div class="sayfa-basligi">
@@ -79,6 +126,72 @@ $yedekVar = ($driver === 'sqlite' ? !empty($backupInfo['sqlite']) : !empty($back
   <?php if (!$yedekVar): ?>
     <div class="uyari warn">Bu sunucuda yedekleme kullanılamıyor: <?= esc((string)$backupInfo['reason']) ?></div>
   <?php endif; ?>
+
+  <div class="izgara-4 bosluk-alt">
+    <div class="sayac vurgulu">
+      <div class="deger"><?= esc($yedekYas) ?></div>
+      <div class="etiket">Son veritabanı yedeği <?= admin_badge($yedekTon === 'olumlu' ? 'güncel' : ($yedekTon === 'uyari' ? 'gecikti' : 'yok/eski'), $yedekTon) ?></div>
+    </div>
+    <div class="sayac">
+      <div class="deger"><?= esc($arsivYas) ?></div>
+      <div class="etiket">Son uploads arşivi <?= admin_badge($arsivTon === 'olumlu' ? 'güncel' : ($arsivTon === 'uyari' ? 'gecikti' : 'yok/eski'), $arsivTon) ?></div>
+    </div>
+    <div class="sayac">
+      <div class="deger"><?= function_exists('backup_auto_db_on') && backup_auto_db_on()
+            ? esc(backup_db_every_days() . ' günde bir') : 'kapalı' ?></div>
+      <div class="etiket">Zamanlı DB yedeği</div>
+    </div>
+    <div class="sayac">
+      <div class="deger"><?= !empty($ftpDurum['ok']) ? 'açık' : 'kapalı' ?></div>
+      <div class="etiket">Uzak yedek (FTP)</div>
+    </div>
+  </div>
+
+  <div class="kart">
+    <div class="kart-baslik">Zamanlı ve uzak yedek</div>
+    <p class="kucuk soluk">
+      Zamanlı yedek <strong>cron turunda</strong> alınır (<code>yedek</code> ve
+      <code>yedek-uploads</code> görevleri). Cron kurulu değilse yedek de alınmaz; yukarıdaki
+      "son yedek" yaşı bunun tek güvenilir göstergesidir.
+      Sıklık, saklanacak adet ve FTP bilgileri
+      <a href="<?= esc(admin_url('settings')) ?>">Ayarlar → Yedekleme</a> altındadır.
+    </p>
+
+    <?php if (empty($ftpDurum['ok'])): ?>
+      <div class="uyari warn"><strong>Uzak yedek çalışmıyor:</strong> <?= esc((string)$ftpDurum['reason']) ?></div>
+    <?php else: ?>
+      <div class="uyari ok">Uzak hedef hazır: <?= esc((string)$ftpDurum['reason']) ?>
+        <?php $sonUzak = trim((string)setting('backup_remote_last', '')); ?>
+        <?php if ($sonUzak !== ''): ?>
+          Son gönderim: <?= esc(tr_date($sonUzak)) ?> —
+          <?= setting('backup_remote_last_ok', '0') === '1' ? 'başarılı' : 'başarısız' ?>.
+        <?php endif; ?>
+      </div>
+    <?php endif; ?>
+    <?php $uzakHata = trim((string)setting('backup_remote_last_error', '')); ?>
+    <?php if ($uzakHata !== ''): ?>
+      <div class="uyari err">Son uzak gönderim hatası: <?= esc($uzakHata) ?></div>
+    <?php endif; ?>
+
+    <?php if ($arsivDurum): ?>
+      <div class="uyari bilgi">
+        Yarım kalmış bir uploads arşivi var:
+        <?= (int)arr($arsivDurum, 'index', 0) ?>/<?= (int)arr($arsivDurum, 'total', 0) ?> dosya işlendi.
+        Cron turu ya da aşağıdaki düğme kaldığı yerden devam ettirir.
+      </div>
+    <?php endif; ?>
+
+    <form method="post" action="<?= esc(admin_url('tools')) ?>" class="dugme-grup">
+      <?= csrf_field() ?>
+      <button type="submit" name="yedek_eylem" value="uploads" class="dugme">uploads arşivini şimdi al</button>
+      <button type="submit" name="yedek_eylem" value="uzak" class="dugme"
+        <?= empty($ftpDurum['ok']) ? 'disabled' : '' ?>>Son yedeği uzağa gönder</button>
+    </form>
+    <p class="mini soluk bosluk-ust">
+      Arşiv <code>.tar</code> biçimindedir (ZipArchive gerektirmez) ve ancak
+      <strong>tamamlandığında</strong> yedek adını alır — yarım dosya listede görünmez.
+    </p>
+  </div>
 
   <div class="kart">
     <div class="kart-baslik">Veritabanı yedeği</div>

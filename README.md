@@ -397,6 +397,38 @@ yapay zekâ üretimi rozeti, içerik üzerinde yayım ve güncelleme tarihi.
 - **Kurulum:** Tamamlanınca `install/.locked` ile kilitlenir.
 - **Reklam kodu, özel CSS ve yapay zekâ anahtarı** yalnız `admin` rolüne açıktır.
 
+### Apache dışı sunucular — bunu atlamayın
+
+Yukarıdaki dosya erişim kuralları `.htaccess` ile uygulanır ve **`.htaccess` yalnız
+Apache'de okunur.** Nginx, IIS, LiteSpeed'in bazı kipleri ya da Caddy altında bu
+dosyalar sessizce yok sayılır: site çalışmaya devam eder, ama `db/` altındaki
+veritabanı ve **yedekler** doğrudan indirilebilir hale gelir. Hiçbir hata mesajı
+görmezsiniz — bu yüzden kurulumdan sonra bir kez **elle sınayın**:
+
+```
+curl -I https://siteniz.com/db/
+```
+
+`403` ya da `404` görmüyorsanız koruma yoktur. Sunucunuza göre ekleyin:
+
+**Nginx** (site bloğunun içine):
+
+```nginx
+location ~ ^/(db|inc|install)/  { deny all; return 404; }
+location ~ ^/(config\.php|cron\.php)$ { deny all; return 404; }
+location ~ \.(sqlite|sqlite-wal|sqlite-shm|sql|tar)$ { deny all; return 404; }
+location ^~ /uploads/ { location ~ \.php$ { deny all; return 404; } }
+```
+
+> `cron.php` yalnız dışarıdan çağrılıyorsa engellemeyin; anahtarla korunuyor.
+> Yedekler `db/` altında durduğu için son kural onları da kapsar.
+
+**IIS** — `web.config` içinde `<requestFiltering>` ile `db`, `inc`, `install`
+dizinlerini gizleyin ve `.sqlite` / `.tar` uzantılarını reddedin.
+
+Ek katman olarak SQLite dosya adı ve yedek adları rastgele ek taşır (tahmin
+edilemezler), ama bu **korumanın yerine geçmez** — yalnız zaman kazandırır.
+
 Denetim bulguları ve düzeltmeleri: [`SECURITY_AUDIT.md`](SECURITY_AUDIT.md).
 
 Güvenlik açığı bildirimi: lütfen genel bir issue açmadan önce depo sahibiyle iletişime geçin.

@@ -83,6 +83,9 @@ $yol[] = ['label' => (string)$post['title'], 'url' => url_post($post)];
         <?php if ($sureGoster): ?><span class="okuma-suresi"><?= (int)$sure ?> dk okuma</span><?php endif; ?>
         <span class="goruntulenme"><?= (int)arr($post, 'view_count', 0) ?> görüntülenme</span>
 
+        <?php /* Okuma ayarları (1.2-13): yazı ölçeği + görünüm; tercih localStorage'da. */ ?>
+        <?php part('okuma-ayarlari', ['yer' => 'haber']); ?>
+
         <?php if (!empty($post['ai_generated'])): ?>
           <span class="rozet-ai-uzun">Yapay zekâ desteğiyle hazırlandı, editör onayından geçti</span>
         <?php endif; ?>

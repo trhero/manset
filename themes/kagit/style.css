@@ -562,7 +562,10 @@ picture{display:block}
 .duzeltme-yayim .duzeltme-metin p:last-child{margin-bottom:0}
 
 /* Ödeme duvarı rozetleri — liste kartlarında ve haber başlığında */
-.rozet-premium{background:#b8860b;color:#fff;border-radius:3px;padding:1px 6px;font-weight:800;font-size:10px;letter-spacing:.04em}
+/* 1.2-13: #b8860b üzerinde beyaz yazı 3.25:1 idi (10px metin, AA eşiği 4.5).
+   #8a6508 ile 5.32:1. Rozet Ajan-D'nin ödeme duvarı özelliği ama stili bu
+   dosyada duruyor; parts/kilit-kutu.php'ye DOKUNULMADI. */
+.rozet-premium{background:#8a6508;color:#fff;border-radius:3px;padding:1px 6px;font-weight:800;font-size:10px;letter-spacing:.04em}
 .rozet-uye{background:rgba(127,127,127,.18);color:inherit;border-radius:3px;padding:1px 6px;font-weight:700;font-size:10px;letter-spacing:.04em}
 
 /* Kart sertleştirmesi (yerleşim denetimi).
@@ -573,3 +576,201 @@ picture{display:block}
 .kart-kategori{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box}
 .kart-govde{min-width:0}
 .kart-sirali .kart-kategori,.kart-sirali .kart-baslik{max-width:calc(100% - 30px)}
+
+/* ============================================================================
+   OKUMA AYARLARI VE KARANLIK MOD (1.2-13)
+   Ayrıntılı gerekçe: themes/gazete/style.css sonundaki aynı başlık.
+   Kısaca: koyu mod ekleme olarak yazılır (açık palet dokunulmadan kalır),
+   "sistem" seçimi parts/okuma-bas.php içinde `data-goruntu`ya çözülür, koyu
+   değerler `:root`a değil `html[…] body`ye yazılır çünkü theme_css_vars()
+   `:root`u stylesheet'ten SONRA basar.
+   ============================================================================ */
+
+/* ------------------------------------------------- yazı ölçeği (3 kademe) */
+:root{--okuma-olcek:1}
+html[data-olcek="kucuk"]{--okuma-olcek:.9}
+html[data-olcek="orta"] {--okuma-olcek:1}
+html[data-olcek="buyuk"]{--okuma-olcek:1.18}
+
+/* Satır genişliği 72ch — kâğıt teması justify + hyphens kullanıyor, uzun
+   satırda göz satır başını kaybediyordu. */
+.haber-govde{font-size:calc((var(--yazi-boy) + 1px) * var(--okuma-olcek));max-width:72ch}
+
+/* ------------------------------------------------------- okuma ayarı kutusu */
+/* JavaScript kapalıyken kutu HİÇ gösterilmez: seçim uygulanamayacağı için
+   çalışmayan bir denetim olurdu. İşareti <head> betiği koyar (okuma-bas.php). */
+.okuma-ayar{display:none;position:relative}
+html[data-okuma="1"] .okuma-ayar{display:inline-flex}
+.okuma-ayar-kutu{position:relative}
+.okuma-ayar-kutu>summary{
+  list-style:none;cursor:pointer;-webkit-user-select:none;user-select:none;
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:38px;min-height:32px;padding:2px 10px;
+  border:1px solid var(--renk-cizgi);border-radius:var(--kose);
+  background:var(--renk-yuzey);color:var(--renk-metin);
+  font-family:var(--yazi-etiket);font-size:13px;font-weight:700;line-height:1.2;
+}
+.okuma-ayar-kutu>summary::-webkit-details-marker{display:none}
+.okuma-ayar-kutu>summary:hover{color:var(--renk-vurgu)}
+.okuma-ayar-panel{
+  position:absolute;z-index:70;top:calc(100% + 5px);left:0;min-width:236px;
+  background:var(--renk-yuzey);color:var(--renk-metin);
+  border:1px solid var(--renk-cizgi);box-shadow:3px 3px 0 rgba(33,28,21,.14);
+  padding:12px 14px 10px;
+}
+.okuma-ayar-grup{border:0;margin:0 0 10px;padding:0}
+.okuma-ayar-grup legend{padding:0;font-family:var(--yazi-etiket);font-size:11px;font-weight:700;
+  color:var(--renk-soluk);text-transform:uppercase;letter-spacing:.09em;margin-bottom:6px}
+.okuma-ayar-secenek{display:flex;gap:6px;flex-wrap:wrap}
+.okuma-ayar-secenek label{
+  display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+  border:1px solid var(--renk-cizgi);padding:6px 11px;
+  font-family:var(--yazi-etiket);font-size:13px;font-weight:600;line-height:1.3;min-height:32px;
+}
+.okuma-ayar-secenek input{margin:0;accent-color:var(--renk-vurgu)}
+.okuma-ayar-secenek input:checked+span{color:var(--renk-vurgu)}
+.okuma-ayar-not{margin:0;font-size:11.5px;line-height:1.45;color:var(--renk-soluk)}
+.alt-okuma{margin:0 0 14px}
+.alt-okuma .okuma-ayar-panel{top:auto;bottom:calc(100% + 5px)}
+/* Dar ekranda panel alttan açılan bir levha olur. NEDEN: 420px'te düğme meta
+   satırının solunda duruyor; sağa hizalı mutlak panel viewport'un SOLUNDAN
+   92px taşıyordu (ölçüldü). Sabit konumda taşma matematiksel olarak imkânsız. */
+@media(max-width:560px){
+  .okuma-ayar-panel{
+    position:fixed;left:12px;right:12px;top:auto;bottom:12px;
+    width:auto;min-width:0;z-index:120;
+  }
+  .alt-okuma .okuma-ayar-panel{top:auto;bottom:12px}
+}
+@media print{.okuma-ayar{display:none!important}}
+
+/* ============================================================ KOYU PALET */
+/* Ölçülen kontrast oranları (WCAG 2.1, normal metin eşiği 4.5:1):
+     metin #efe7d8 / zemin #181510 ....... 14.82
+     metin #efe7d8 / yüzey #211d16 ....... 13.65
+     soluk #b6a892 / yüzey #211d16 ........ 7.19
+     spot  #cbbfa9 / yüzey #211d16 ........ 9.24
+     ana-metin  #bfa48a / #211d16 ......... 7.10   (color-mix yedeği)
+     vurgu-metin #b68580 / #211d16 ........ 5.32   (color-mix yedeği) */
+html[data-goruntu="koyu"]{color-scheme:dark}
+html[data-goruntu="acik"]{color-scheme:light}
+
+html[data-goruntu="koyu"] body{
+  --renk-zemin:#181510;
+  --renk-yuzey:#211d16;
+  --renk-metin:#efe7d8;
+  --renk-soluk:#b6a892;
+  --renk-cizgi:#a99d88;
+  --renk-spot:#cbbfa9;
+  --renk-ince:rgba(239,231,216,.24);   /* kâğıttaki ince mürekkep çizgileri */
+  --renk-ok-m:#8fd0a0;
+  --renk-ana-metin:#bfa48a;
+  --renk-vurgu-metin:#b68580;
+}
+@supports (color: color-mix(in srgb, red 50%, white)){
+  html[data-goruntu="koyu"] body{
+    --renk-ana-metin:color-mix(in srgb, var(--renk-ana) 55%, #ffffff);
+    --renk-vurgu-metin:color-mix(in srgb, var(--renk-vurgu) 55%, #ffffff);
+  }
+}
+
+/* Kâğıt dokusu koyu mürekkep lekeleriyle çiziliyordu; koyu zeminde ters çevrilir. */
+html[data-goruntu="koyu"] body.dokulu{
+  background-image:
+    repeating-linear-gradient(0deg, rgba(239,231,216,.020) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, rgba(239,231,216,.016) 0 1px, transparent 1px 4px),
+    radial-gradient(ellipse at 18% 22%, rgba(191,164,138,.07), transparent 58%),
+    radial-gradient(ellipse at 82% 74%, rgba(191,164,138,.06), transparent 55%);
+}
+
+/* İnce mürekkep çizgileri: açık palette rgba(33,28,21,…) sabitiyle yazılmışlar,
+   koyu zeminde görünmez olurlardı. Tek grupta çevriliyor. */
+html[data-goruntu="koyu"] .arama-oneri li,
+html[data-goruntu="koyu"] .kapak-yan-oge,
+html[data-goruntu="koyu"] .kapak-alt > *,
+html[data-goruntu="koyu"] .ilgili-izgara > *,
+html[data-goruntu="koyu"] .tarihli-liste li,
+html[data-goruntu="koyu"] .duz-liste li,
+html[data-goruntu="koyu"] .sirali-liste li,
+html[data-goruntu="koyu"] .mini-liste li,
+html[data-goruntu="koyu"] .kategori-listesi li,
+html[data-goruntu="koyu"] .piyasa-liste li,
+html[data-goruntu="koyu"] .hava-liste li,
+html[data-goruntu="koyu"] .duzeltme-oge,
+html[data-goruntu="koyu"] .yorum,
+html[data-goruntu="koyu"] .kolofon-sutunlar > *+*,
+html[data-goruntu="koyu"] .sutun,
+html[data-goruntu="koyu"] .ana-menu li+li{border-color:var(--renk-ince)}
+html[data-goruntu="koyu"] .arama-oneri{box-shadow:3px 3px 0 rgba(0,0,0,.5)}
+html[data-goruntu="koyu"] .arama-oneri li a:hover,
+html[data-goruntu="koyu"] .arama-oneri li.secili a,
+html[data-goruntu="koyu"] .pagination a:hover{background:rgba(239,231,216,.10)}
+html[data-goruntu="koyu"] body.kart-shadow .kart{box-shadow:2px 2px 0 rgba(0,0,0,.45)}
+html[data-goruntu="koyu"] .kart-sira{color:rgba(239,231,216,.16)}
+html[data-goruntu="koyu"] .hata-kod{color:rgba(239,231,216,.20)}
+
+/* Marka rengi ZEMİN olduğunda üstündeki yazı --renk-zemin idi; koyu modda
+   --renk-zemin de koyulaştığı için "koyu üstüne koyu" oluyordu (ölçüldü 1.78 ve
+   3.12). Bu iki yerde yazı kâğıt tonuna sabitlenir.
+   Ölçüm: #f7f3e9 / #7a2118 = 9.21 · #f7f3e9 / #8b5a2b = 5.27 */
+html[data-goruntu="koyu"] .son-dakika-satiri .etiket,
+html[data-goruntu="koyu"] .rozet-son-dakika,
+html[data-goruntu="koyu"] .cookie-bar button{color:#f7f3e9}
+
+/* Marka rengiyle YAZILAN metinler (zemin olarak kullanıldığı yerler değişmez). */
+html[data-goruntu="koyu"] .ana-menu a:hover,
+html[data-goruntu="koyu"] .haber-govde a,
+html[data-goruntu="koyu"] .kaynak a,
+html[data-goruntu="koyu"] .blok-tumu,
+html[data-goruntu="koyu"] .tumu a,
+html[data-goruntu="koyu"] .tarihli-liste time,
+html[data-goruntu="koyu"] .hava-derece,
+html[data-goruntu="koyu"] .kirinti a,
+html[data-goruntu="koyu"] .okuma-ayar-kutu>summary:hover,
+html[data-goruntu="koyu"] .okuma-ayar-secenek input:checked+span{color:var(--renk-vurgu-metin)}
+html[data-goruntu="koyu"] .kart-kategori,
+html[data-goruntu="koyu"] .haber-kategori{color:var(--renk-ana-metin)}
+html[data-goruntu="koyu"] body.damgali .kart-kategori,
+html[data-goruntu="koyu"] body.damgali .haber-kategori{border-color:var(--renk-ana-metin)}
+html[data-goruntu="koyu"] .kapak-spot,
+html[data-goruntu="koyu"] .kart-spot,
+html[data-goruntu="koyu"] .spot{color:var(--renk-spot)}
+html[data-goruntu="koyu"] .form-sonuc.ok{border-color:var(--renk-ok-m);color:var(--renk-ok-m)}
+html[data-goruntu="koyu"] .piyasa-degisim.up{color:var(--renk-ok-m)}
+html[data-goruntu="koyu"] .icerik-kilit{box-shadow:inset 0 0 0 1px rgba(239,231,216,.08)}
+html[data-goruntu="koyu"] .icerik-kilit::before{
+  background:linear-gradient(180deg,rgba(33,29,22,0),var(--renk-yuzey));
+}
+html[data-goruntu="koyu"] .okuma-ayar-panel{box-shadow:3px 3px 0 rgba(0,0,0,.5)}
+
+/* JavaScript kapalıyken sistem tercihi yine de okunsun: yalnız DEĞİŞKENLER. */
+@media (prefers-color-scheme: dark){
+  html[data-tema="sistem"]{color-scheme:dark}
+  html[data-tema="sistem"] body{
+    --renk-zemin:#181510; --renk-yuzey:#211d16; --renk-metin:#efe7d8;
+    --renk-soluk:#b6a892; --renk-cizgi:#a99d88;
+  }
+}
+
+@media print{
+  :root{--okuma-olcek:1}
+  .haber-govde{font-size:11.5pt;max-width:none}
+}
+
+/* Hareketi azalt: görünüm/ölçek değiştirirken geçiş animasyonu olmasın.
+   NEDEN: kart başlıklarında `transition:color`, kart görsellerinde
+   `transition:transform/opacity` var; koyu moda geçiş bunları hep birden
+   tetikliyor ve hareketten rahatsız olan okur için ekran "dalgalanıyor".
+   Projede aynı saygı manşet şeridinde de gösteriliyor. */
+@media (prefers-reduced-motion: reduce){
+  .kart-baslik,.kart-gorsel img,.kart,.kart-bag,.ana-menu,
+  .kaydet-dugme,.paylas-dugme,.dugme,
+  .okuma-ayar-kutu>summary,.okuma-ayar-secenek label{
+    transition:none!important;
+    animation:none!important;
+  }
+}
+
+/* Klavye odak halkası koyu modda görünür kalmalı (WCAG 1.4.11, 3:1).
+   #b68580 / #181510 = 5.77. */
+html[data-goruntu="koyu"] :focus-visible{outline-color:var(--renk-vurgu-metin)}

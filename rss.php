@@ -7,8 +7,14 @@
  * Adresler:
  *   /rss.php                        → site geneli RSS 2.0 (son 30 haber)
  *   /rss.php?kategori=<slug>        → yalnız o kategori
+ *   /rss.php?etiket=<slug>          → yalnız o etiket
+ *   /rss.php?yazar=<id>             → yalnız o yazar (personel hesaplar)
  *   /rss.php?tur=atom               → aynı içeriğin Atom 1.0 karşılığı
+ *   /rss.php?tur=json               → JSON Feed 1.1 (aynı içerik) · /feed.php kısayolu
  *   /rss.php?adet=N                 → öğe sayısı (1-50, varsayılan 30)
+ *
+ * Ayarlar (Panel → Ayarlar → SEO ve dağıtım):
+ *   seo_feed_full  Tam metin mi özet mi · seo_feed_items · seo_feed_ttl · seo_websub_hub
  *
  * Not: bu dosya inc/rss.php (RSS TOPLAYICI, Ajan-4) ile ilgisizdir; oradaki tüm
  * fonksiyonlar rss_*, buradakiler feed_* önekiyle adlandırılmıştır.
@@ -36,6 +42,36 @@ function feed_default_count() {
 /** Besleme önbellek süresi (saniye) — Ajan-10 modülü gelene kadar yalnız HTTP başlığı. */
 function feed_ttl() {
     return max(0, min(86400, (int)setting('seo_feed_ttl', '900')));
+}
+
+/**
+ * WebSub hub adresi. inc/seo.php burada YÜKLENMEZ (besleme kendi başına ayakta
+ * durmalı), bu yüzden ayar doğrudan okunur — seo_websub_hub() ile aynı kural.
+ */
+function feed_hub() {
+    $u = trim((string)setting('seo_websub_hub', ''));
+    if ($u === '' || !preg_match('#^https?://[^\s<>"\']+$#i', $u)) { return ''; }
+    return $u;
+}
+
+/**
+ * Etiket slug'ından görünen etiket adını bulur (etiketler serbest metindir,
+ * kendi tabloları yoktur). Yalnız YAYINDAKİ haberlerin etiketleri taranır:
+ * çöp kutusundaki bir haberin özel etiketi beslemenin başlığında sızmasın.
+ *
+ * @return string bulunamazsa boş dize
+ */
+function feed_tag_label($slug) {
+    $slug = slugify((string)$slug);
+    if ($slug === '') { return ''; }
+    $rows = qa('SELECT p.tags FROM posts p WHERE p.tags <> \'\' AND ' . published_where('p') . ' LIMIT 1000',
+        [':nowts' => now()]);
+    foreach ($rows as $row) {
+        foreach (tags_to_array($row['tags']) as $t) {
+            if (slugify($t) === $slug) { return (string)$t; }
+        }
+    }
+    return '';
 }
 
 // ============================================================ XML güvenliği
@@ -94,17 +130,37 @@ function feed_404($message = 'Böyle bir besleme yok.') {
 
 // ============================================================ veri
 
+/**
+ * Besleme kapsamı — kategori / etiket / yazar ya da site geneli.
+ * @return array ['kind'=>'site|category|tag|author', 'category'=>?array, 'tag'=>string, 'author'=>?array]
+ */
+function feed_scope($category = null, $tag = '', $author = null) {
+    if (is_array($category)) { return ['kind' => 'category', 'category' => $category, 'tag' => '', 'author' => null]; }
+    if ((string)$tag !== '')  { return ['kind' => 'tag', 'category' => null, 'tag' => (string)$tag, 'author' => null]; }
+    if (is_array($author))    { return ['kind' => 'author', 'category' => null, 'tag' => '', 'author' => $author]; }
+    return ['kind' => 'site', 'category' => null, 'tag' => '', 'author' => null];
+}
+
 /** Beslemede gösterilecek haberler (gövde dâhil). */
-function feed_posts($category, $limit) {
+function feed_posts(array $scope, $limit) {
     $limit = max(1, min(50, (int)$limit));
     $params = [':nowts' => now()];
     $extra = '';
-    if (is_array($category)) {
+    if ($scope['kind'] === 'category') {
         $extra = ' AND p.category_id = :cid';
-        $params[':cid'] = (int)$category['id'];
+        $params[':cid'] = (int)$scope['category']['id'];
+    } elseif ($scope['kind'] === 'tag') {
+        // LIKE ön eleme yapar; kesin eşleşme aşağıda slug karşılaştırmasıyla süzülür
+        // (etiket 'spor' araması 'sporcu'yu getirmesin).
+        $extra = ' AND p.tags LIKE :tg';
+        $params[':tg'] = '%' . str_replace(['%', '_'], ['\%', '\_'], (string)$scope['tag']) . '%';
+        $limit = min(50, $limit * 3);
+    } elseif ($scope['kind'] === 'author') {
+        $extra = ' AND p.author_id = :aid';
+        $params[':aid'] = (int)$scope['author']['id'];
     }
     // visibility/teaser GEREKLİ: kilitli haberlerin gövdesi beslemeye basılmaz.
-    return qa('SELECT p.id, p.title, p.slug, p.spot, p.body, p.image, p.tags,
+    $rows = qa('SELECT p.id, p.title, p.slug, p.spot, p.body, p.image, p.tags,
                       p.visibility, p.teaser,
                       p.published_at, p.updated_at, p.created_at,
                       c.name AS category_name, c.slug AS category_slug,
@@ -114,6 +170,17 @@ function feed_posts($category, $limit) {
                LEFT JOIN users u ON u.id = p.author_id
                WHERE ' . published_where('p') . $extra . '
                ORDER BY p.published_at DESC, p.id DESC LIMIT ' . $limit, $params);
+
+    if ($scope['kind'] !== 'tag') { return $rows; }
+
+    $ara = slugify((string)$scope['tag']);
+    $out = [];
+    foreach ($rows as $r) {
+        foreach (tags_to_array(arr($r, 'tags', '')) as $t) {
+            if (slugify($t) === $ara) { $out[] = $r; break; }
+        }
+    }
+    return $out;
 }
 
 /**
@@ -129,8 +196,20 @@ function feed_post_is_open($p) {
     return ($g === '' || $g === 'public');
 }
 
-/** Beslemeye basılacak gövde — kilitliyse boş. */
+/**
+ * Beslemeye basılacak gövde — kilitliyse boş.
+ *
+ * `seo_feed_full` KAPALIYSA tam metin hiç basılmaz; okur ve toplayıcı yalnız
+ * özet görür. Ayarın varsayılanı AÇIK (1.1 davranışı korunur), ama içerik
+ * kazıyıcılardan şikâyetçi yayıncı bunu panelden kapatabilir.
+ */
+function feed_full_text() {
+    return setting('seo_feed_full', '1') !== '0';
+}
+
+/** Beslemeye basılacak gövde — kilitliyse ya da tam metin kapalıysa boş. */
 function feed_body($p) {
+    if (!feed_full_text()) { return ''; }
     if (!feed_post_is_open($p)) { return ''; }
     return sanitize_html((string)arr($p, 'body', ''), false);
 }
@@ -197,39 +276,59 @@ function feed_post_modified($post) {
     return $ts ? $ts : feed_post_time($post);
 }
 
+/** Kapsamın sorgu parametreleri. */
+function feed_scope_query(array $scope) {
+    if ($scope['kind'] === 'category') { return ['kategori' => (string)$scope['category']['slug']]; }
+    if ($scope['kind'] === 'tag')      { return ['etiket' => slugify((string)$scope['tag'])]; }
+    if ($scope['kind'] === 'author')   { return ['yazar' => (int)$scope['author']['id']]; }
+    return [];
+}
+
 /** Beslemenin kendi adresi (rel="self"). */
-function feed_self_url($category, $type) {
-    $q = [];
-    if (is_array($category)) { $q['kategori'] = (string)$category['slug']; }
-    if ($type === 'atom') { $q['tur'] = 'atom'; }
+function feed_self_url(array $scope, $type) {
+    $q = feed_scope_query($scope);
+    if ($type !== 'rss') { $q['tur'] = $type; }
     return base_url() . '/rss.php' . ($q ? '?' . http_build_query($q) : '');
 }
 
 /** Beslemenin insan tarafı adresi. */
-function feed_site_url($category) {
-    return is_array($category) ? url_category($category) : base_url() . '/';
+function feed_site_url(array $scope) {
+    if ($scope['kind'] === 'category') { return url_category($scope['category']); }
+    if ($scope['kind'] === 'tag')      { return url_tag((string)$scope['tag']); }
+    return base_url() . '/';
 }
 
 /** Besleme başlığı. */
-function feed_title($category) {
+function feed_title(array $scope) {
     $site = (string)site('title');
-    return is_array($category) ? $site . ' — ' . (string)$category['name'] : $site;
+    switch ($scope['kind']) {
+        case 'category': return $site . ' — ' . (string)$scope['category']['name'];
+        case 'tag':      return $site . ' — ' . (string)$scope['tag'] . ' etiketi';
+        case 'author':   return $site . ' — ' . (string)$scope['author']['name'];
+        default:         return $site;
+    }
 }
 
 /** Besleme açıklaması. */
-function feed_description($category) {
-    if (is_array($category)) {
-        return (string)$category['name'] . ' kategorisindeki son haberler — ' . site('title');
+function feed_description(array $scope) {
+    $site = (string)site('title');
+    switch ($scope['kind']) {
+        case 'category':
+            return (string)$scope['category']['name'] . ' kategorisindeki son haberler — ' . $site;
+        case 'tag':
+            return (string)$scope['tag'] . ' etiketiyle ilişkili son haberler — ' . $site;
+        case 'author':
+            return (string)$scope['author']['name'] . ' imzalı son haberler — ' . $site;
     }
     $d = trim((string)site('desc'));
     if ($d === '') { $d = trim((string)site('slogan')); }
-    if ($d === '') { $d = (string)site('title') . ' haber beslemesi'; }
+    if ($d === '') { $d = $site . ' haber beslemesi'; }
     return $d;
 }
 
 // ============================================================ RSS 2.0
 
-function feed_render_rss(array $posts, $category, $selfUrl) {
+function feed_render_rss(array $posts, array $scope, $selfUrl) {
     feed_headers('application/rss+xml; charset=utf-8');
 
     $build = $posts ? feed_post_modified($posts[0]) : time();
@@ -241,18 +340,22 @@ function feed_render_rss(array $posts, $category, $selfUrl) {
         . '     xmlns:dc="http://purl.org/dc/elements/1.1/"' . "\n"
         . '     xmlns:atom="http://www.w3.org/2005/Atom">' . "\n"
         . '<channel>' . "\n"
-        . '<title>' . feed_x(feed_title($category)) . '</title>' . "\n"
-        . '<link>' . feed_x(feed_site_url($category)) . '</link>' . "\n"
-        . '<description>' . feed_x(feed_description($category)) . '</description>' . "\n"
+        . '<title>' . feed_x(feed_title($scope)) . '</title>' . "\n"
+        . '<link>' . feed_x(feed_site_url($scope)) . '</link>' . "\n"
+        . '<description>' . feed_x(feed_description($scope)) . '</description>' . "\n"
         . '<language>tr-TR</language>' . "\n"
         . '<lastBuildDate>' . feed_x(date('r', $build)) . '</lastBuildDate>' . "\n"
         . '<generator>' . feed_x('Manşet ' . MANSET_VERSION) . '</generator>' . "\n"
         . '<atom:link href="' . feed_x($selfUrl) . '" rel="self" type="application/rss+xml"/>' . "\n");
 
+    // WebSub: toplayıcı hub'ı buradan öğrenir, bildirim cron turunda gönderilir.
+    $hub = feed_hub();
+    if ($hub !== '') { feed_out('<atom:link rel="hub" href="' . feed_x($hub) . '"/>' . "\n"); }
+
     if ($logo !== '') {
         feed_out('<image><url>' . feed_x($logo) . '</url>'
-            . '<title>' . feed_x(feed_title($category)) . '</title>'
-            . '<link>' . feed_x(feed_site_url($category)) . '</link></image>' . "\n");
+            . '<title>' . feed_x(feed_title($scope)) . '</title>'
+            . '<link>' . feed_x(feed_site_url($scope)) . '</link></image>' . "\n");
     }
 
     foreach ($posts as $p) {
@@ -286,7 +389,7 @@ function feed_render_rss(array $posts, $category, $selfUrl) {
 
 // ============================================================ Atom 1.0
 
-function feed_render_atom(array $posts, $category, $selfUrl) {
+function feed_render_atom(array $posts, array $scope, $selfUrl) {
     feed_headers('application/atom+xml; charset=utf-8');
 
     $build = $posts ? feed_post_modified($posts[0]) : time();
@@ -295,13 +398,16 @@ function feed_render_atom(array $posts, $category, $selfUrl) {
     feed_out('<?xml version="1.0" encoding="UTF-8"?>' . "\n"
         . '<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="tr-TR">' . "\n"
         . '<id>' . feed_x($selfUrl) . '</id>' . "\n"
-        . '<title>' . feed_x(feed_title($category)) . '</title>' . "\n"
-        . '<subtitle>' . feed_x(feed_description($category)) . '</subtitle>' . "\n"
+        . '<title>' . feed_x(feed_title($scope)) . '</title>' . "\n"
+        . '<subtitle>' . feed_x(feed_description($scope)) . '</subtitle>' . "\n"
         . '<updated>' . feed_x(date('c', $build)) . '</updated>' . "\n"
         . '<generator version="' . feed_x(MANSET_VERSION) . '">Manşet</generator>' . "\n"
         . '<link rel="self" type="application/atom+xml" href="' . feed_x($selfUrl) . '"/>' . "\n"
-        . '<link rel="alternate" type="text/html" href="' . feed_x(feed_site_url($category)) . '"/>' . "\n"
+        . '<link rel="alternate" type="text/html" href="' . feed_x(feed_site_url($scope)) . '"/>' . "\n"
         . '<author><name>' . feed_x(site('title')) . '</name></author>' . "\n");
+
+    $hub = feed_hub();
+    if ($hub !== '') { feed_out('<link rel="hub" href="' . feed_x($hub) . '"/>' . "\n"); }
 
     if ($logo !== '') { feed_out('<logo>' . feed_x($logo) . '</logo>' . "\n"); }
 
@@ -340,24 +446,105 @@ function feed_render_atom(array $posts, $category, $selfUrl) {
     feed_out('</feed>' . "\n");
 }
 
+// ============================================================ JSON Feed 1.1
+
+/**
+ * JSON Feed 1.1 (https://jsonfeed.org/version/1.1).
+ *
+ * NEDEN: RSS/Atom okuyamayan ama JSON tüketen istemciler (mobil uygulama,
+ * Slack/Discord köprüleri, statik site oluşturucular) için tek dosyalık karşılık.
+ * XML gibi elle üretilmez — json_encode kaçışları kendisi yapar.
+ */
+function feed_render_json(array $posts, array $scope, $selfUrl) {
+    feed_headers('application/feed+json; charset=utf-8');
+
+    $doc = [
+        'version'       => 'https://jsonfeed.org/version/1.1',
+        'title'         => feed_utf8_clean(feed_title($scope)),
+        'home_page_url' => feed_site_url($scope),
+        'feed_url'      => $selfUrl,
+        'description'   => feed_utf8_clean(feed_description($scope)),
+        'language'      => 'tr-TR',
+    ];
+    $logo = (string)site('logo');
+    if ($logo !== '') { $doc['icon'] = $logo; }
+    $hub = feed_hub();
+    if ($hub !== '') { $doc['hubs'] = [['type' => 'WebSub', 'url' => $hub]]; }
+
+    $items = [];
+    foreach ($posts as $p) {
+        $url = url_post($p);
+        $body = feed_body($p);
+        $item = [
+            'id'             => $url,
+            'url'            => $url,
+            'title'          => feed_utf8_clean((string)arr($p, 'title', '')),
+            'date_published' => date('c', feed_post_time($p)),
+            'date_modified'  => date('c', feed_post_modified($p)),
+        ];
+        $spot = feed_spot($p);
+        if ($spot !== '') { $item['summary'] = feed_utf8_clean($spot); }
+        if ($body !== '') { $item['content_html'] = feed_utf8_clean($body); }
+        else { $item['content_text'] = feed_utf8_clean($spot); }
+
+        $img = feed_image_info($p);
+        if ($img) { $item['image'] = $img['url']; }
+
+        $author = trim((string)arr($p, 'author_name', ''));
+        if ($author !== '') { $item['authors'] = [['name' => feed_utf8_clean($author)]]; }
+
+        $etiketler = tags_to_array(arr($p, 'tags', ''));
+        $catName = trim((string)arr($p, 'category_name', ''));
+        if ($catName !== '') { array_unshift($etiketler, $catName); }
+        if ($etiketler) { $item['tags'] = array_values(array_unique(array_map('feed_utf8_clean', $etiketler))); }
+
+        $items[] = $item;
+    }
+    $doc['items'] = $items;
+
+    feed_out((string)json_encode($doc, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+}
+
 // ============================================================ yönlendirme
 
 $tur = isset($_GET['tur']) ? strtolower(trim((string)$_GET['tur'])) : '';
 if ($tur === '') { $tur = 'rss'; }
-if (!in_array($tur, ['rss', 'atom'], true)) { feed_404('Geçersiz besleme türü.'); }
+if (!in_array($tur, ['rss', 'atom', 'json'], true)) { feed_404('Geçersiz besleme türü.'); }
 
-$catSlug = isset($_GET['kategori']) ? trim((string)$_GET['kategori']) : '';
+// Kapsam: kategori / etiket / yazar — aynı anda yalnız biri.
+$catSlug   = isset($_GET['kategori']) ? trim((string)$_GET['kategori']) : '';
+$tagSlug   = isset($_GET['etiket']) ? trim((string)$_GET['etiket']) : '';
+$authorId  = isset($_GET['yazar']) ? (int)$_GET['yazar'] : 0;
+
 $category = null;
+$tagLabel = '';
+$author = null;
+
 if ($catSlug !== '') {
     $category = category_by_slug($catSlug);
     if (!$category) { feed_404('Kategori bulunamadı.'); }
+} elseif ($tagSlug !== '') {
+    $tagLabel = feed_tag_label($tagSlug);
+    if ($tagLabel === '') { feed_404('Etiket bulunamadı.'); }
+} elseif ($authorId > 0) {
+    // Yalnız PERSONEL yazarların beslemesi vardır: üye hesapları (member) burada
+    // listelenmez, yoksa `?yazar=N` taraması üye adlarını dışarı sızdırırdı.
+    $author = q1('SELECT id, name FROM users WHERE id = :i AND active = 1 AND role <> \'member\'',
+        [':i' => $authorId]);
+    if (!$author) { feed_404('Yazar bulunamadı.'); }
+    $yaziSayisi = (int)qv('SELECT COUNT(*) FROM posts p WHERE p.author_id = :a AND ' . published_where('p'),
+        [':a' => (int)$author['id'], ':nowts' => now()], 0);
+    if ($yaziSayisi === 0) { feed_404('Yazar bulunamadı.'); }
 }
+
+$scope = feed_scope($category, $tagLabel, $author);
 
 $count = isset($_GET['adet']) ? (int)$_GET['adet'] : feed_default_count();
 $count = max(1, min(50, $count > 0 ? $count : feed_default_count()));
 
-$posts = feed_posts($category, $count);
-$self = feed_self_url($category, $tur);
+$posts = feed_posts($scope, $count);
+$self = feed_self_url($scope, $tur);
 
-if ($tur === 'atom') { feed_render_atom($posts, $category, $self); }
-else { feed_render_rss($posts, $category, $self); }
+if ($tur === 'atom')      { feed_render_atom($posts, $scope, $self); }
+elseif ($tur === 'json')  { feed_render_json($posts, $scope, $self); }
+else                      { feed_render_rss($posts, $scope, $self); }

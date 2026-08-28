@@ -31,9 +31,18 @@ BASE="http://${HOST}:${PORT}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-RUN="${SCRIPT_DIR}/.run"
-JAR="${SCRIPT_DIR}/.cookies"
-LOG="${SCRIPT_DIR}/.server.log"
+# Çalışma dizini PORTA GÖRE ayrılır. Paylaşılan tek bir .run dizini, aynı anda
+# koşan iki e2e turunun birbirinin kurulumunu silmesi demekti: 1.2 geliştirme
+# dalgasında dört ajan aynı anda koştu ve üçü birbirini öldürdü (Ajan-A ölçtü).
+RUN="${SCRIPT_DIR}/.run-${PORT}"
+# GEÇİCİ DOSYALAR DA PORTA BAĞLI.
+# `.run` dizini porta bağlandıktan sonra bile `.body`, `.cookies`, `.server.log`
+# gibi dosyalar ORTAKTI: eşzamanlı iki tur birbirinin yanıt gövdesini eziyor ve
+# ilgisiz onlarca test kırmızıya dönüyordu (Ajan-B ölçtü: izole kopyada 394/0,
+# ortak ağaçta 100 kırmızı). Sahte kırmızı, gerçek gerilemeden ayırt edilemez.
+T="${SCRIPT_DIR}/.t-${PORT}"
+JAR="${T}.cookies"
+LOG="${T}.server.log"
 
 PASS=0
 FAIL=0
@@ -57,7 +66,7 @@ FEED_PID=""
 cleanup() {
   if [ -n "${SERVER_PID}" ]; then kill "${SERVER_PID}" 2>/dev/null || true; fi
   if [ -n "${FEED_PID}" ]; then kill "${FEED_PID}" 2>/dev/null || true; fi
-  rm -f "${JAR}" "${SCRIPT_DIR}/.body" "${SCRIPT_DIR}/.inline.js" "${SCRIPT_DIR}/.feed.xml" "${SCRIPT_DIR}/.page.html" "${SCRIPT_DIR}/.mcookies" 2>/dev/null || true
+  rm -f "${JAR}" "${T}.body" "${T}.inline.js" "${T}.feed.xml" "${T}.page.html" "${T}.mcookies" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -66,9 +75,9 @@ req() {
   local method="$1"; shift
   local url="$1"; shift
   local out
-  out="$(curl -s -o "${SCRIPT_DIR}/.body" -w '%{http_code}' -b "${JAR}" -c "${JAR}" -X "${method}" "$@" "${url}" 2>/dev/null)"
+  out="$(curl -s -o "${T}.body" -w '%{http_code}' -b "${JAR}" -c "${JAR}" -X "${method}" "$@" "${url}" 2>/dev/null)"
   HTTP_CODE="${out}"
-  BODY="$(cat "${SCRIPT_DIR}/.body" 2>/dev/null)"
+  BODY="$(cat "${T}.body" 2>/dev/null)"
 }
 get()  { req GET "$1" "${@:2}"; }
 post() { req POST "$1" "${@:2}"; }
@@ -99,12 +108,12 @@ post_form() {
     body="$body$(urlenc "$k")=$(urlenc "$v")"
   done
   local code
-  code="$(printf '%s' "$body" | curl -s -o "${SCRIPT_DIR}/.body" -w '%{http_code}' \
+  code="$(printf '%s' "$body" | curl -s -o "${T}.body" -w '%{http_code}' \
       -b "${JAR}" -c "${JAR}" -X POST \
       -H 'Content-Type: application/x-www-form-urlencoded' \
       --data-binary @- "${url}" 2>/dev/null)"
   HTTP_CODE="${code}"
-  BODY="$(cat "${SCRIPT_DIR}/.body" 2>/dev/null)"
+  BODY="$(cat "${T}.body" 2>/dev/null)"
 }
 
 # post_form_jar <çerez kavanozu> <url> <alan=değer…>
@@ -121,12 +130,12 @@ post_form_jar() {
 post_json() {
   local url="$1" json="$2"; shift 2
   local code
-  code="$(printf '%s' "${json}" | curl -s -o "${SCRIPT_DIR}/.body" -w '%{http_code}' \
+  code="$(printf '%s' "${json}" | curl -s -o "${T}.body" -w '%{http_code}' \
       -b "${JAR}" -c "${JAR}" -X POST \
       -H 'Content-Type: application/json' -H 'Accept: application/json' "$@" \
       --data-binary @- "${url}" 2>/dev/null)"
   HTTP_CODE="${code}"
-  BODY="$(cat "${SCRIPT_DIR}/.body" 2>/dev/null)"
+  BODY="$(cat "${T}.body" 2>/dev/null)"
 }
 
 # Beklenen HTTP kodu
@@ -200,7 +209,7 @@ while IFS= read -r f; do
     LINT_FAIL=$((LINT_FAIL+1))
     bad "php -l ${f#${ROOT}/}" "$(printf '%s' "${out}" | head -2 | tr '\n' ' ')"
   fi
-done < <(find "${ROOT}" -name '*.php' -not -path '*/tests/.run/*' -not -path '*/.git/*' | sort)
+done < <(find "${ROOT}" -name '*.php' -not -path '*/tests/.run*/*' -not -path '*/.git/*' | sort)
 [ "${LINT_FAIL}" -eq 0 ] && ok "tüm PHP dosyaları söz dizimi açısından temiz"
 
 head1 "0.2 · Gömülü JS denetimi"
@@ -231,14 +240,14 @@ if [ -n "${NODE_BIN}" ]; then
       $out = "";
       foreach ($m[1] as $blk) { $out .= $blk . "\n;\n"; }
       file_put_contents($argv[2], $out);
-    ' "${f}" "${SCRIPT_DIR}/.inline.js" 2>/dev/null
-    if [ -s "${SCRIPT_DIR}/.inline.js" ]; then
+    ' "${f}" "${T}.inline.js" 2>/dev/null
+    if [ -s "${T}.inline.js" ]; then
       JS_COUNT=$((JS_COUNT+1))
-      if ! out="$("${NODE_BIN}" -e "const fs=require('fs');new Function(fs.readFileSync(process.argv[1],'utf8'));" "${SCRIPT_DIR}/.inline.js" 2>&1)"; then
+      if ! out="$("${NODE_BIN}" -e "const fs=require('fs');new Function(fs.readFileSync(process.argv[1],'utf8'));" "${T}.inline.js" 2>&1)"; then
         JS_FAIL=$((JS_FAIL+1)); bad "gömülü js: ${f#${ROOT}/}" "$(printf '%s' "${out}" | head -3 | tr '\n' ' ')"
       fi
     fi
-    rm -f "${SCRIPT_DIR}/.inline.js"
+    rm -f "${T}.inline.js"
   done < <(find "${ROOT}/admin" "${ROOT}/themes" "${ROOT}/install" -name '*.php' 2>/dev/null | sort)
   [ "${JS_FAIL}" -eq 0 ] && ok "${JS_COUNT} JS kaynağı ayrıştırılabiliyor"
 else
@@ -249,16 +258,26 @@ fi
 head1 "1 · Test kopyası hazırlanıyor"
 rm -rf "${RUN}"
 mkdir -p "${RUN}"
-for item in index.php api.php cron.php rss.php sitemap.php hesap.php .htaccess inc admin install themes assets; do
+# KÖKTEKİ HER .php KOPYALANIR — liste elle sayılmaz.
+# Eskiden dosyalar tek tek yazılıydı ve 1.2'nin beş yeni kök dosyası
+# (odeme.php, bulten.php, feed.php, ads.txt.php, paylas-gorsel.php) listede
+# olmadığı için test kopyasına HİÇ girmiyordu: e2e onları sınadığını sanıyordu,
+# oysa dosya orada yoktu. Yeni bir kök betiği ekleyen kimse bu listeyi
+# güncellemeyi hatırlamak zorunda kalmasın.
+for f in "${ROOT}"/*.php; do
+  [ -e "${f}" ] && cp "${f}" "${RUN}/" 2>/dev/null
+done
+for item in .htaccess inc admin install themes assets; do
   [ -e "${ROOT}/${item}" ] && cp -r "${ROOT}/${item}" "${RUN}/" 2>/dev/null
 done
+# config.php geliştirme kurulumundan gelmiş olabilir; aşağıda siliniyor.
 mkdir -p "${RUN}/db" "${RUN}/uploads/cache"
 cp "${ROOT}/db/.htaccess" "${RUN}/db/" 2>/dev/null
 cp "${ROOT}/uploads/.htaccess" "${RUN}/uploads/" 2>/dev/null
 # Geliştirme kurulumundan kalan kilit/yapılandırma kopyalanmış olabilir — testte sıfırdan kurulur
 rm -f "${RUN}/config.php" "${RUN}/install/.locked"
 rm -f "${RUN}/db/"*.sqlite* 2>/dev/null
-ok "çalışma kopyası: tests/.run (temiz kurulum)"
+ok "çalışma kopyası: $(basename "${RUN}") (temiz kurulum)"
 
 # ---------------------------------------------------------------- 2) sunucu
 head1 "2 · PHP yerleşik sunucusu"
@@ -271,9 +290,13 @@ SERVER_PID=$!
 
 # PHP yerleşik sunucusu tek işçilidir: uygulama kendi kendine HTTP isteği atarsa kilitlenir.
 # Bu yüzden RSS beslemeleri AYRI bir sunucudan servis edilir.
-FEED_PORT=$((PORT + 1))
+# FİKSTÜR SUNUCUSU PORTU: +1 DEĞİL.
+# `PORT + 1`, ajan başına 8921/8922/8923 gibi bitişik portlar dağıtıldığında
+# bir turun fikstür sunucusunu DİĞER turun ana sunucusunun portuna koyuyordu
+# (8921+1 = 8922). Ajan-C bunu ölçtü. +50 ile ana port aralığından uzaklaşır.
+FEED_PORT=$((PORT + 50))
 FEED_BASE="http://${HOST}:${FEED_PORT}"
-"${PHP}" -S "${HOST}:${FEED_PORT}" -t "${SCRIPT_DIR}/fixtures" > "${SCRIPT_DIR}/.feed.log" 2>&1 &
+"${PHP}" -S "${HOST}:${FEED_PORT}" -t "${SCRIPT_DIR}/fixtures" > "${T}.feed.log" 2>&1 &
 FEED_PID=$!
 
 for _ in $(seq 1 40); do
@@ -736,7 +759,7 @@ head1 "12 · SEO, site haritaları ve beslemeler"
 # XML geçerliliğini dosyaya indirip doğrula (tek işçili sunucu, self-request yapılamaz)
 check_xml() {
   local name="$1" url="$2"
-  local f="${SCRIPT_DIR}/.feed.xml"
+  local f="${T}.feed.xml"
   local code
   code="$(curl -s -b "${JAR}" -o "${f}" -w '%{http_code}' "${url}" 2>/dev/null)"
   if [ "${code}" != "200" ]; then bad "${name}" "HTTP ${code}"; return; fi
@@ -784,16 +807,16 @@ if [ -n "${POST_URL}" ]; then
   expect_body "BreadcrumbList JSON-LD" 'BreadcrumbList'
   expect_body "yayım tarihi (BİK m.4)" 'datePublished'
   # JSON-LD blokları geçerli JSON mu?
-  printf '%s' "${BODY}" > "${SCRIPT_DIR}/.page.html"
+  printf '%s' "${BODY}" > "${T}.page.html"
   if "${PHP}" -r '
       $h = file_get_contents($argv[1]);
       preg_match_all("#<script type=\"application/ld\+json\">(.*?)</script>#s", $h, $m);
       if (!$m[1]) { exit(2); }
       foreach ($m[1] as $j) { if (json_decode(trim($j), true) === null) { exit(1); } }
       exit(0);
-  ' "${SCRIPT_DIR}/.page.html" 2>/dev/null; then ok "JSON-LD blokları geçerli JSON"
+  ' "${T}.page.html" 2>/dev/null; then ok "JSON-LD blokları geçerli JSON"
   else bad "JSON-LD blokları geçersiz"; fi
-  rm -f "${SCRIPT_DIR}/.page.html"
+  rm -f "${T}.page.html"
 fi
 
 get "${BASE}/arama?q=$(urlenc 'ulaşım')"
@@ -1334,16 +1357,16 @@ done
 expect_body "kayıt formu tembel CSRF kullanıyor" "data-csrf"
 
 # Kayıt — anonim ziyaretçi gibi (kendi çerez kavanozu)
-MJAR="${SCRIPT_DIR}/.mcookies"
+MJAR="${T}.mcookies"
 rm -f "${MJAR}"
 MCSRF="$(curl -s -c "${MJAR}" -b "${MJAR}" "${BASE}/api.php?a=public.csrf" 2>/dev/null | grep -o '"csrf":"[^"]*"' | sed 's/.*:"//;s/"//')"
 if [ -n "${MCSRF}" ]; then ok "üye tarafı CSRF anahtarı alındı"; else bad "public.csrf yanıt vermedi"; fi
 
 printf '{"email":"e2euye@ornek.test","password":"uyeparola123","display_name":"E2E Üye","kvkk":1,"website":"","_csrf":"%s"}' "${MCSRF}" \
-  | curl -s -o "${SCRIPT_DIR}/.body" -c "${MJAR}" -b "${MJAR}" -X POST \
+  | curl -s -o "${T}.body" -c "${MJAR}" -b "${MJAR}" -X POST \
     -H 'Content-Type: application/json' -H "X-CSRF: ${MCSRF}" --data-binary @- \
     "${BASE}/api.php?a=members.register" >/dev/null 2>&1
-BODY="$(cat "${SCRIPT_DIR}/.body")"
+BODY="$(cat "${T}.body")"
 expect_json_ok "üye kaydı alındı"
 
 UROL="$(dbq "SELECT role FROM users WHERE email = 'e2euye@ornek.test'")"
@@ -1374,10 +1397,10 @@ if [ "${BOTVAR}" = "0" ]; then ok "honeypot: bot kaydı oluşturulmuyor"; else b
 
 # Personel bu uçtan giriş yapamaz
 printf '{"email":"%s","password":"%s","_csrf":"%s"}' "${ADMIN_EMAIL}" "${ADMIN_PASS}" "${MCSRF}" \
-  | curl -s -o "${SCRIPT_DIR}/.body" -c "${MJAR}" -b "${MJAR}" -X POST \
+  | curl -s -o "${T}.body" -c "${MJAR}" -b "${MJAR}" -X POST \
     -H 'Content-Type: application/json' -H "X-CSRF: ${MCSRF}" --data-binary @- \
     "${BASE}/api.php?a=members.login" >/dev/null 2>&1
-BODY="$(cat "${SCRIPT_DIR}/.body")"
+BODY="$(cat "${T}.body")"
 expect_json_err "personel hesabı üye girişinden giremiyor"
 
 # --- Premium içerik kilidi
@@ -1420,10 +1443,10 @@ if [ -n "${UYEID}" ] && [ "${UYEID}" != "0" ]; then
   rm -f "${UJAR}"
   UCSRF="$(curl -s -c "${UJAR}" -b "${UJAR}" "${BASE}/api.php?a=public.csrf" 2>/dev/null | grep -o '"csrf":"[^"]*"' | sed 's/.*:"//;s/"//')"
   printf '{"email":"e2euye@ornek.test","password":"uyeparola123","_csrf":"%s"}' "${UCSRF}" \
-    | curl -s -o "${SCRIPT_DIR}/.body" -c "${UJAR}" -b "${UJAR}" -X POST \
+    | curl -s -o "${T}.body" -c "${UJAR}" -b "${UJAR}" -X POST \
       -H 'Content-Type: application/json' -H "X-CSRF: ${UCSRF}" --data-binary @- \
       "${BASE}/api.php?a=members.login" >/dev/null 2>&1
-  BODY="$(cat "${SCRIPT_DIR}/.body")"
+  BODY="$(cat "${T}.body")"
   expect_json_ok "üye giriş yapabiliyor"
 
   # Geçerli abonelik → tam metin
@@ -1553,10 +1576,10 @@ dbq "UPDATE users SET role = 'yazar' WHERE email = 'yazar@ornek.test'" >/dev/nul
 head1 "21 · Güvenlik denetimi turu 2 (Ajan-11 bulguları)"
 
 # --- Sözleşme: SQL'de yalnız tek tırnak (§0)
-if php "${SCRIPT_DIR}/kural-sql.php" "${RUN}" >/dev/null 2>&1; then
+if "${PHP}" "${SCRIPT_DIR}/kural-sql.php" "${RUN}" >/dev/null 2>&1; then
   ok "SQL dizelerinde çift tırnak yok (CONTRACTS §0)"
 else
-  bad "çift tırnaklı SQL dizesi var" "$(php "${SCRIPT_DIR}/kural-sql.php" "${RUN}" 2>&1 | head -4)"
+  bad "çift tırnaklı SQL dizesi var" "$("${PHP}" "${SCRIPT_DIR}/kural-sql.php" "${RUN}" 2>&1 | head -4)"
 fi
 
 # --- KRİTİK: RSS beslemesi premium gövdeyi sızdırmamalı
@@ -1615,12 +1638,12 @@ dbq "UPDATE posts SET visibility = 'public' WHERE id = ${PREMID2}" >/dev/null
 dbq "UPDATE users SET role = 'seo_editor' WHERE email = 'yazar@ornek.test'" >/dev/null
 SJAR="${SCRIPT_DIR}/.scookies"
 rm -f "${SJAR}"
-curl -s -c "${SJAR}" -o "${SCRIPT_DIR}/.body" "${BASE}/admin/" 2>/dev/null
-SC="$(grep -o 'name="_csrf" value="[^"]*"' "${SCRIPT_DIR}/.body" | head -1 | sed 's/.*value="//;s/"$//')"
+curl -s -c "${SJAR}" -o "${T}.body" "${BASE}/admin/" 2>/dev/null
+SC="$(grep -o 'name="_csrf" value="[^"]*"' "${T}.body" | head -1 | sed 's/.*value="//;s/"$//')"
 printf 'do=login&_csrf=%s&email=yazar@ornek.test&password=yazarparola123' "${SC}" \
   | curl -s -o /dev/null -c "${SJAR}" -b "${SJAR}" --data-binary @- "${BASE}/admin/?p=login" 2>/dev/null
-curl -s -b "${SJAR}" -o "${SCRIPT_DIR}/.body" "${BASE}/admin/" 2>/dev/null
-SCSRF="$(grep -o 'csrf: *"[^"]*"' "${SCRIPT_DIR}/.body" | head -1 | sed 's/.*csrf: *"//;s/"$//')"
+curl -s -b "${SJAR}" -o "${T}.body" "${BASE}/admin/" 2>/dev/null
+SCSRF="$(grep -o 'csrf: *"[^"]*"' "${T}.body" | head -1 | sed 's/.*csrf: *"//;s/"$//')"
 
 # Testin BOŞUNA geçmediğinden emin ol: seo_editor oturumu gerçekten açık mı?
 SKOD="$(curl -s -o /dev/null -w '%{http_code}' -b "${SJAR}" "${BASE}/admin/?p=theme")"
@@ -1632,7 +1655,7 @@ fi
 
 KOD='</style><script>alert(1)</script>'
 printf '{"theme":"gazete","values":{"custom_css":"%s"},"_csrf":"%s"}' "${KOD}" "${SCSRF}" \
-  | curl -s -o "${SCRIPT_DIR}/.body" -b "${SJAR}" -X POST \
+  | curl -s -o "${T}.body" -b "${SJAR}" -X POST \
     -H 'Content-Type: application/json' -H "X-CSRF: ${SCSRF}" --data-binary @- \
     "${BASE}/api.php?a=theme.save" >/dev/null 2>&1
 # NOT: settings tablosunun sütunları skey/sval'dir (key/value DEĞİL) — yanlış sütun
@@ -1643,7 +1666,7 @@ else bad "THEME.CSS KAPISI AÇIK" "ayarlara betik yazıldı (adet=${YAZILAN})"; 
 
 # Aynı isteği YÖNETİCİ yaparsa geçmeli — kapının fazla kapanmadığını da denetle
 printf '{"theme":"gazete","values":{"custom_css":".e2e-deneme{color:red}"},"_csrf":"%s"}' "${CSRF}" \
-  | curl -s -o "${SCRIPT_DIR}/.body" -b "${JAR}" -X POST \
+  | curl -s -o "${T}.body" -b "${JAR}" -X POST \
     -H 'Content-Type: application/json' -H "X-CSRF: ${CSRF}" --data-binary @- \
     "${BASE}/api.php?a=theme.save" >/dev/null 2>&1
 YONETICI="$(dbq "SELECT COUNT(*) FROM settings WHERE sval LIKE '%e2e-deneme%'")"
@@ -1653,8 +1676,8 @@ dbq "DELETE FROM settings WHERE sval LIKE '%e2e-deneme%'" >/dev/null
 
 # --- KRİTİK: yetki yükseltme — admin olmayan admin hesabı açamaz
 dbq "UPDATE users SET role = 'chief_editor' WHERE email = 'yazar@ornek.test'" >/dev/null
-curl -s -b "${SJAR}" -o "${SCRIPT_DIR}/.body" "${BASE}/admin/?p=users" 2>/dev/null
-UCSRF="$(grep -o 'name="_csrf" value="[^"]*"' "${SCRIPT_DIR}/.body" | head -1 | sed 's/.*value="//;s/"$//')"
+curl -s -b "${SJAR}" -o "${T}.body" "${BASE}/admin/?p=users" 2>/dev/null
+UCSRF="$(grep -o 'name="_csrf" value="[^"]*"' "${T}.body" | head -1 | sed 's/.*value="//;s/"$//')"
 post_form_jar "${SJAR}" "${BASE}/admin/?p=users" \
   "_csrf=${UCSRF}" "do=save" "id=0" "fields=v2" "name=Sahte Yonetici" \
   "email=e2esahte@ornek.test" "role=admin" "active=1" "password=cokgizliparola1"
@@ -1676,11 +1699,11 @@ else bad "IS_STAFF=0 API'DE UYGULANMIYOR" "HTTP ${KOD2}"; fi
 
 # Girişi de kapatmalı
 rm -f "${SJAR}2"
-curl -s -c "${SJAR}2" -o "${SCRIPT_DIR}/.body" "${BASE}/admin/" 2>/dev/null
-SC2="$(grep -o 'name="_csrf" value="[^"]*"' "${SCRIPT_DIR}/.body" | head -1 | sed 's/.*value="//;s/"$//')"
+curl -s -c "${SJAR}2" -o "${T}.body" "${BASE}/admin/" 2>/dev/null
+SC2="$(grep -o 'name="_csrf" value="[^"]*"' "${T}.body" | head -1 | sed 's/.*value="//;s/"$//')"
 printf 'do=login&_csrf=%s&email=yazar@ornek.test&password=yazarparola123' "${SC2}" \
-  | curl -s -o "${SCRIPT_DIR}/.body" -c "${SJAR}2" -b "${SJAR}2" --data-binary @- "${BASE}/admin/?p=login" 2>/dev/null
-if grep -q 'E-posta veya parola hatalı' "${SCRIPT_DIR}/.body"; then
+  | curl -s -o "${T}.body" -c "${SJAR}2" -b "${SJAR}2" --data-binary @- "${BASE}/admin/?p=login" 2>/dev/null
+if grep -q 'E-posta veya parola hatalı' "${T}.body"; then
   ok "panel erişimi geri alınan personel giriş yapamıyor"
 else bad "ASKIYA ALINAN PERSONEL GİRİŞ YAPABİLİYOR"; fi
 rm -f "${SJAR}" "${SJAR}2"
@@ -1723,7 +1746,7 @@ TOKENOZET="$(probe hash_token "${HAMTOKEN}")"
 dbq "DELETE FROM member_tokens WHERE user_id = ${UYEID2}" >/dev/null
 dbq "INSERT INTO member_tokens (user_id, kind, token_hash, expires_at, used_at, created_at)
      VALUES (${UYEID2}, 'verify', '${TOKENOZET}', '2099-01-01 00:00:00', NULL, '2026-01-01 00:00:00')" >/dev/null
-curl -s -o "${SCRIPT_DIR}/.body" "${BASE}/hesap.php?s=dogrula&token=${HAMTOKEN}" 2>/dev/null
+curl -s -o "${T}.body" "${BASE}/hesap.php?s=dogrula&token=${HAMTOKEN}" 2>/dev/null
 KULLANILDI="$(dbq "SELECT COALESCE(used_at, '') FROM member_tokens WHERE token_hash = '${TOKENOZET}'")"
 if [ -n "${KULLANILDI}" ]; then ok "e-posta doğrulama bağlantısı (?token=) çalışıyor"
 else bad "DOĞRULAMA BAĞLANTISI ÖLÜ" "token tüketilmedi"; fi
@@ -1827,6 +1850,126 @@ get "${BASE}/admin/"
 CSRF="$(csrf_from_admin)"
 
 # ---------------------------------------------------------------- özet
+# ---------------------------------------------------------------- 22) 1.2 "Yayıncı paketi"
+# 1.2'nin yeni özellikleri. Bu bölüm eklenene kadar e2e'nin 394 testinin tamamı
+# 1.1 dönemine aitti: yeni kod yalnız "gerileme yok" ölçüsünde sınanıyordu.
+head1 "22 · 1.2 Yayıncı paketi"
+
+# --- Çerezsiz sunulması gereken 1.2 adresleri (CONTRACTS §3.1)
+for YOL in "/feed.php" "/ads.txt"; do
+  CK="$(curl -sI -o /dev/null -D - "${BASE}${YOL}" 2>/dev/null | grep -ci '^set-cookie' || true)"
+  if [ "${CK}" = "0" ]; then ok "anonim ${YOL} çerez almıyor"
+  else bad "anonim ${YOL} çerez alıyor" "sayfa önbelleği ölür"; fi
+done
+
+# --- ads.txt: içerik yokken 404 (boş dosya yayımlamak yanlış bilgidir)
+get "${BASE}/ads.txt"
+expect_code "ads.txt içerik yokken 404" "404"
+dbq "DELETE FROM settings WHERE skey = 'ads_txt'" >/dev/null
+dbq "INSERT INTO settings (skey, sval) VALUES ('ads_txt', 'ornek.com, 12345, DIRECT')" >/dev/null
+get "${BASE}/ads.txt"
+expect_code "ads.txt içerik varken 200" "200"
+expect_body "ads.txt içeriği basılıyor" "ornek.com"
+
+# --- JSON Feed geçerli JSON mu?
+get "${BASE}/feed.php"
+expect_code "JSON Feed açılıyor" "200"
+if printf '%s' "${BODY}" | "${PHP}" -r '$j=json_decode(stream_get_contents(STDIN),true); exit(is_array($j)&&isset($j["items"])?0:1);'; then
+  ok "JSON Feed geçerli JSON ve items taşıyor"
+else bad "JSON Feed bozuk" "$(printf '%s' "${BODY}" | head -c 200)"; fi
+
+# --- Ölçülü ödeme duvarı
+PWID="$(dbq "SELECT id FROM posts WHERE status = 'published' ORDER BY id ASC LIMIT 1")"
+PWSLUG="$(dbq "SELECT slug FROM posts WHERE id = ${PWID}")"
+dbq "UPDATE posts SET visibility = 'premium', teaser = 'Onizleme metni.' WHERE id = ${PWID}" >/dev/null
+dbq "DELETE FROM settings WHERE skey IN ('paywall_meter_enabled','paywall_meter_free')" >/dev/null
+dbq "INSERT INTO settings (skey, sval) VALUES ('paywall_meter_enabled', '1')" >/dev/null
+dbq "INSERT INTO settings (skey, sval) VALUES ('paywall_meter_free', '1')" >/dev/null
+rm -rf "${RUN}/uploads/cache"/* 2>/dev/null || true
+
+PWJAR="${T}.pw.jar"; rm -f "${PWJAR}"
+PWURL="${BASE}/haber/${PWSLUG}-${PWID}"
+
+# 1. okuma: hak var → tam metin, sayaç çerezi VERİLİR, yanıt paylaşılamaz
+PWH="$(curl -s -D - -o "${T}.pw1" -b "${PWJAR}" -c "${PWJAR}" "${PWURL}" 2>/dev/null)"
+if grep -q 'icerik-kilit' "${T}.pw1"; then bad "ölçülü hak ilk okumada açmalı" "kilit kutusu geldi"
+else ok "ölçülü hak ilk okumayı açıyor"; fi
+if printf '%s' "${PWH}" | grep -qi '^set-cookie'; then ok "sayaç çerezi yalnız kilitli haberde veriliyor"
+else bad "sayaç çerezi verilmedi" "ölçülü duvar sayacı çalışamaz"; fi
+if printf '%s' "${PWH}" | grep -qi 'cache-control:.*no-store'; then ok "ölçülü yanıt private/no-store"
+else bad "ölçülü yanıt paylaşılabilir" "$(printf '%s' "${PWH}" | grep -i cache-control | head -1)"; fi
+
+# Anasayfa hâlâ çerezsiz olmalı — istisna YALNIZ kilitli haber sayfasıdır
+ANONCK="$(curl -sI -o /dev/null -D - "${BASE}/" 2>/dev/null | grep -ci '^set-cookie' || true)"
+if [ "${ANONCK}" = "0" ]; then ok "duvar açıkken anasayfa hâlâ çerezsiz"
+else bad "duvar anasayfaya çerez sızdırdı" "sayfa önbelleği ölür"; fi
+
+# 2. FARKLI premium haber: hak bitti → kilit
+PWID2="$(dbq "SELECT id FROM posts WHERE status = 'published' AND id <> ${PWID} ORDER BY id ASC LIMIT 1")"
+if [ -n "${PWID2}" ]; then
+  PWSLUG2="$(dbq "SELECT slug FROM posts WHERE id = ${PWID2}")"
+  dbq "UPDATE posts SET visibility = 'premium', teaser = 'Onizleme metni.' WHERE id = ${PWID2}" >/dev/null
+  curl -s -o "${T}.pw2" -b "${PWJAR}" -c "${PWJAR}" "${BASE}/haber/${PWSLUG2}-${PWID2}" 2>/dev/null
+  if grep -q 'icerik-kilit' "${T}.pw2"; then ok "hak bitince kilit geliyor"
+  else bad "hak bittiği halde tam metin verildi" "ölçülü duvar çalışmıyor"; fi
+
+  # KRİTİK: hakkı biten okurun KİLİTLİ sayfası önbelleğe yazılıp taze okura
+  # servis edilmemeli — yoksa duvar ikinci okurdan sonra sessizce ölür.
+  curl -s -o "${T}.pw3" "${BASE}/haber/${PWSLUG2}-${PWID2}" 2>/dev/null
+  if grep -q 'icerik-kilit' "${T}.pw3"; then
+    bad "kilitli sayfa taze okura servis edildi" "önbellek ödeme duvarını deliyor"
+  else ok "taze okur kendi hakkını alıyor (kilitli sayfa önbelleğe yazılmadı)"; fi
+fi
+
+# --- Bülten çift onayı: kayıt sonrası abone ONAYSIZ olmalı
+dbq "DELETE FROM newsletter_subscribers WHERE email = 'e2e-bulten@ornek.test'" >/dev/null
+get "${BASE}/"
+PCSRF="$(csrf_from_body)"
+# Anasayfada bülten formu kapalıysa gövdede _csrf olmaz; panel oturumunun
+# belirteci burada da geçerlidir (aynı oturum belirteci kullanılıyor).
+[ -z "${PCSRF}" ] && PCSRF="${CSRF}"
+post_json "${BASE}/api.php?a=newsletter.subscribe"   "{\"email\":\"e2e-bulten@ornek.test\",\"website\":\"\",\"_csrf\":\"${PCSRF}\"}"   -H "X-CSRF: ${PCSRF}"
+expect_json_ok "bülten kaydı alındı"
+expect_body_not "ham onay belirteci yanıta sızmıyor" "token"
+NLC="$(dbq "SELECT confirmed FROM newsletter_subscribers WHERE email = 'e2e-bulten@ornek.test'")"
+if [ "${NLC}" = "0" ]; then ok "bülten kaydı ONAYSIZ başlıyor (çift onay)"
+else bad "bülten kaydı onaysız başlamadı" "çift onay akışı atlanıyor (confirmed='${NLC}')"; fi
+
+# --- KVKK: abone listesi oturumsuz indirilemez
+# TEMİZ kavanozla: ${JAR} bu noktada önceki bölümlerden yönetici oturumu taşıyor
+# olabilir ve test kendi kurgusuyla yanılırdı ("korumasız" derken aslında
+# yetkili bir istek atıyor olurduk).
+curl -s -o "${T}.nl" -w '%{http_code}' "${BASE}/api.php?a=newsletter.export" > "${T}.nlcode" 2>/dev/null
+HTTP_CODE="$(cat "${T}.nlcode")"
+if [ "${HTTP_CODE}" = "401" ] || [ "${HTTP_CODE}" = "403" ]; then ok "abone listesi oturumsuz indirilemiyor (HTTP ${HTTP_CODE})"
+else bad "abone listesi korumasız" "HTTP ${HTTP_CODE}"; fi
+
+# --- Ödeme: webhook imzasız kabul edilmemeli
+post_json "${BASE}/odeme.php?webhook=1" '{"tutar":1,"durum":"basarili"}'
+if [ "${HTTP_CODE}" = "200" ]; then bad "imzasız webhook kabul edildi" "abonelik sahte ödemeyle uzatılabilir"
+else ok "imzasız webhook reddedildi (HTTP ${HTTP_CODE})"; fi
+
+# --- Sırlar yedekte düz metin durmamalı (denetim turu 4, YÜKSEK-1)
+# 1.2'nin zamanlı uzak yedeği veritabanını ÜÇÜNCÜ TARAF bir FTP sunucusuna
+# gönderiyor. Denetçi gerçek bir yedekten ödeme sağlayıcı tuzunu okuyup onunla
+# GEÇERLİ İMZALI sahte bir ödeme bildirimi üretti. Bu kapı o zinciri kapatır.
+#
+# Sonda üzerinden koşuyor: kabuktan `php -r` ile gömülü yol göndermek Git Bash'te
+# kırılgan (bkz. tests/probe.php başlığı) — ilk denemede tur burada asıldı.
+SIRSONDA="$("${PHP}" "${SCRIPT_DIR}/probe.php" "${RUN}" backup_secret 2>&1 | tr -d '')"
+case "${SIRSONDA}" in
+  TAMAM*)      ok "API anahtarı yedekte şifreli ve uygulama içinden çözülüyor" ;;
+  DUZ_METIN*)  bad "API anahtarı yedekte DÜZ METİN" "yedek çalınırsa sağlayıcı anahtarı da çalınır" ;;
+  *)           bad "yedek sır sondası başarısız" "${SIRSONDA}" ;;
+esac
+
+# --- Analitik: haber görüntülemesi kaydediliyor mu?
+if [ -n "$(dbq "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'hit%'" 2>/dev/null)" ] \
+   || [ "${MANSET_DRIVER}" = "mysql" ]; then
+  post_json "${BASE}/api.php?a=public.view" "{\"id\":${PWID}}" -H "X-CSRF: ${PCSRF}"
+  ok "analitik sayaç ucu yanıt verdi (HTTP ${HTTP_CODE})"
+fi
+
 head1 "Özet"
 printf '  Başarılı: %s   Başarısız: %s\n' "$(c_green "${PASS}")" "$( [ "${FAIL}" -eq 0 ] && c_green 0 || c_red "${FAIL}" )"
 if [ "${FAIL}" -gt 0 ]; then

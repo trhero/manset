@@ -160,6 +160,6 @@ $ad    = $uye && function_exists('member_display_name') ? member_display_name($u
 .uyari-kutu{padding:12px 15px;border-radius:var(--kose,6px);margin-bottom:16px;border:1px solid}
 .uyari-kutu.ok{background:#f2fbf5;border-color:#b7e0c0;color:#14532d}
 .uyari-kutu.err{background:#fdf3f3;border-color:#f0b6b6;color:#7a1f1f}
-.rozet-premium{background:#b8860b;color:#fff;border-radius:3px;padding:2px 8px;font-size:11px;font-weight:800;letter-spacing:.04em}
+.rozet-premium{background:#8a6508;color:#fff;border-radius:3px;padding:2px 8px;font-size:11px;font-weight:800;letter-spacing:.04em}
 .rozet-uye{background:#eef1f4;color:#4b5563;border-radius:3px;padding:2px 8px;font-size:11px;font-weight:700}
 </style>

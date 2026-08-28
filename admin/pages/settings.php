@@ -8,9 +8,50 @@ require_can('settings.manage');
 
 $adminPageTitle = 'Ayarlar';
 
-/** Bu ekranda yönetilen ayar anahtarları: anahtar => ['tip', 'etiket', 'yardım'] */
+/**
+ * Ayar grubu dosyalarını okur: admin/settings-groups/NN-ad.php
+ *
+ * Her dosya şu biçimde bir dizi DÖNDÜRÜR:
+ *   return [
+ *     'key'    => 'analitik',                 // benzersiz grup anahtarı
+ *     'title'  => 'Analitik',                 // kart başlığı
+ *     'perm'   => 'settings.manage',          // (istege bagli) grubu görmek için gereken izin
+ *     'fields' => ['anahtar' => ['tip', 'Etiket', 'Yardım metni'], …],
+ *     'clamp'  => function (array $saved) { … return $saved; },  // (istege bagli) sınır düzeltmesi
+ *   ];
+ *
+ * Tipler: text | number | textarea | bool | image | select | secret
+ *   select → dördüncü öğe seçenek dizisi:  ['select', 'Sağlayıcı', 'yardım', ['a' => 'A', 'b' => 'B']]
+ *   secret → ekranda maskelenir; BOŞ gönderilirse mevcut değer KORUNUR
+ *            (yoksa her kaydedişte API anahtarı silinirdi).
+ *
+ * NEDEN DOSYA BAŞINA GRUP: 1.2'de dört ayrı iş akışı bu ekrana grup ekliyor.
+ * Tek bir settings_fields() gövdesi dört akışın aynı satırda çakışması demekti.
+ */
+function settings_groups() {
+    static $gruplar = null;
+    if ($gruplar !== null) { return $gruplar; }
+    $gruplar = settings_core_groups();
+    foreach ((array)glob(dirname(__DIR__) . '/settings-groups/*.php') as $dosya) {
+        $g = include $dosya;
+        if (!is_array($g) || empty($g['key']) || empty($g['fields'])) { continue; }
+        // Çekirdek bir grubu EZMEZ: aynı anahtar gelirse dosya yok sayılır.
+        if (isset($gruplar[$g['key']])) { continue; }
+        $gruplar[$g['key']] = $g;
+    }
+    return $gruplar;
+}
+
+/** Grup anahtarı => alanlar (eski çağrı biçimi korunur). */
 function settings_fields() {
-    return [
+    $out = [];
+    foreach (settings_groups() as $k => $g) { $out[$k] = $g['fields']; }
+    return $out;
+}
+
+/** Çekirdek gruplar. */
+function settings_core_groups() {
+    $c = [
         'site' => [
             'site_title'   => ['text', 'Site adı', ''],
             'site_slogan'  => ['text', 'Slogan', 'Logonun altında görünür.'],
@@ -40,6 +81,15 @@ function settings_fields() {
             'cache_ttl_post' => ['number', 'Haber sayfası önbellek süresi (sn)', ''],
         ],
     ];
+    $baslik = [
+        'site' => 'Site kimliği', 'okuma' => 'Okuma ve adresler', 'yorum' => 'Yorumlar',
+        'yasal' => 'Yasal ve bildirimler', 'performans' => 'Performans',
+    ];
+    $out = [];
+    foreach ($c as $k => $fields) {
+        $out[$k] = ['key' => $k, 'title' => $baslik[$k], 'fields' => $fields];
+    }
+    return $out;
 }
 
 // ---------------------------------------------------------------- kaydet
@@ -48,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && inp('do') === 'save') {
     $saved = [];
     foreach (settings_fields() as $group) {
         foreach ($group as $key => $def) {
-            list($type, $label,) = $def;
+            $type = isset($def[0]) ? $def[0] : 'text';
             switch ($type) {
                 case 'bool':
                     $saved[$key] = inp($key) ? '1' : '0';
@@ -64,6 +114,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && inp('do') === 'save') {
                     // Yalnız uploads içindeki dosya adı kabul edilir
                     $saved[$key] = preg_match('#^[A-Za-z0-9._\-/]{0,255}$#', $v) && strpos($v, '..') === false ? $v : '';
                     break;
+                case 'select':
+                    // Yalnız TANIMLI seçenekler yazılır: kullanıcı formu değiştirip
+                    // rastgele bir değer gönderemez.
+                    $secenek = isset($def[3]) && is_array($def[3]) ? $def[3] : [];
+                    $v = (string)inp($key, '');
+                    $saved[$key] = array_key_exists($v, $secenek) ? $v : (string)key($secenek);
+                    break;
+                case 'secret':
+                    // BOŞ gönderim mevcut değeri KORUR. Aksi halde ekran anahtarı
+                    // maskeli gösterdiği için her kaydediş API anahtarını silerdi.
+                    $v = trim((string)inp($key, ''));
+                    if ($v !== '') { $saved[$key] = sanitize_line($v, 255); }
+                    break;
                 default:
                     $saved[$key] = sanitize_line((string)inp($key, ''), 255);
             }
@@ -74,6 +137,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && inp('do') === 'save') {
     $saved['headline_limit'] = (string)max(1, min(12, (int)$saved['headline_limit']));
     $saved['cache_ttl_home'] = (string)max(0, min(3600, (int)$saved['cache_ttl_home']));
     $saved['cache_ttl_post'] = (string)max(0, min(86400, (int)$saved['cache_ttl_post']));
+
+    // Grup dosyaları kendi sınır düzeltmelerini uygulayabilir.
+    foreach (settings_groups() as $g) {
+        if (isset($g['clamp']) && is_callable($g['clamp'])) {
+            $d = call_user_func($g['clamp'], $saved);
+            if (is_array($d)) { $saved = $d; }
+        }
+    }
 
     setting_set_many($saved);
     if (function_exists('cache_flush')) { cache_flush(); }
@@ -123,15 +194,17 @@ $cronKey = (string)cfg('cron_key', '');
     <input type="hidden" name="do" value="save">
 
     <?php
-    $groupTitles = [
-      'site' => 'Site kimliği', 'okuma' => 'Okuma ve adresler', 'yorum' => 'Yorumlar',
-      'yasal' => 'Yasal ve bildirimler', 'performans' => 'Performans',
-    ];
-    foreach (settings_fields() as $groupKey => $fields): ?>
+    foreach (settings_groups() as $groupKey => $grup):
+      $fields = $grup['fields'];
+      // Grup kendi iznini isteyebilir (ör. ödeme anahtarları yalnız admin).
+      if (!empty($grup['perm']) && !can($adminUser, $grup['perm'])) { continue; } ?>
       <div class="kart">
-        <div class="kart-baslik"><?= esc($groupTitles[$groupKey]) ?></div>
+        <div class="kart-baslik"><?= esc($grup['title']) ?></div>
+        <?php if (!empty($grup['note'])): ?><p class="kucuk soluk"><?= esc($grup['note']) ?></p><?php endif; ?>
         <?php foreach ($fields as $key => $def):
-          list($type, $label, $help) = $def;
+          $type  = isset($def[0]) ? $def[0] : 'text';
+          $label = isset($def[1]) ? $def[1] : $key;
+          $help  = isset($def[2]) ? $def[2] : '';
           $val = setting($key, ''); ?>
           <?php if ($type === 'bool'): ?>
             <div class="form-alan">
@@ -159,6 +232,25 @@ $cronKey = (string)cfg('cron_key', '');
               <?php if ($val): ?>
                 <div class="gorsel-onizleme bosluk-ust"><img src="<?= esc(url_upload($val)) ?>" alt=""></div>
               <?php endif; ?>
+              <?php if ($help): ?><span class="form-yardim"><?= esc($help) ?></span><?php endif; ?>
+            </div>
+          <?php elseif ($type === 'select'): ?>
+            <div class="form-alan">
+              <label for="f_<?= esc($key) ?>"><?= esc($label) ?></label>
+              <select id="f_<?= esc($key) ?>" name="<?= esc($key) ?>">
+                <?php foreach ((isset($def[3]) && is_array($def[3]) ? $def[3] : []) as $ov => $ol): ?>
+                  <option value="<?= esc($ov) ?>" <?= (string)$val === (string)$ov ? 'selected' : '' ?>><?= esc($ol) ?></option>
+                <?php endforeach; ?>
+              </select>
+              <?php if ($help): ?><span class="form-yardim"><?= esc($help) ?></span><?php endif; ?>
+            </div>
+          <?php elseif ($type === 'secret'): ?>
+            <div class="form-alan">
+              <label for="f_<?= esc($key) ?>"><?= esc($label) ?></label>
+              <?php /* Değer EKRANA BASILMAZ. Boş bırakılırsa mevcut anahtar korunur. */ ?>
+              <input type="password" id="f_<?= esc($key) ?>" name="<?= esc($key) ?>" value=""
+                     autocomplete="new-password" maxlength="255"
+                     placeholder="<?= $val !== '' ? 'kayıtlı — değiştirmek için yazın' : 'tanımlı değil' ?>">
               <?php if ($help): ?><span class="form-yardim"><?= esc($help) ?></span><?php endif; ?>
             </div>
           <?php else: ?>

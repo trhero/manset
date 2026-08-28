@@ -36,6 +36,10 @@ if (!defined('MANSET_BOOTSTRAPPED')) { exit; }
       </div>
     </div>
 
+    <?php /* Okuma ayarları her sayfada erişilebilir olsun diye alt bilgide de basılır
+             (1.2-13). Beş temada da aynı parça; tema seçimi bu özelliği düşürmez. */ ?>
+    <div class="alt-okuma"><?php part('okuma-ayarlari', ['yer' => 'alt']); ?></div>
+
     <p class="telif mono">© <?= esc(site('year')) ?> <?= esc(site('title')) ?> — tüm hakları saklıdır.
       <span class="uretici">Manşet ile hazırlandı.</span></p>
   </div>

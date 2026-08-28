@@ -12,7 +12,7 @@
   --renk-zemin:#f4f5f7;
   --renk-yuzey:#ffffff;
   --renk-metin:#1c1f23;
-  --renk-soluk:#6b7280;
+  --renk-soluk:#666d78;   /* 1.2-13: #6b7280 sayfa zemininde 4.43:1 idi; 4.78:1 */
   --renk-cizgi:#e3e7ec;
   --renk-alt:#1c1f23;
   --yazi-govde:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
@@ -418,7 +418,7 @@ body.kart-shadow .sabit-sayfa{box-shadow:0 1px 3px rgba(0,0,0,.09)}
 .site-alt a:hover{color:#fff}
 .alt-iletisim a{text-decoration:underline}
 .telif{border-top:1px solid #363c44;margin-top:24px;padding-top:14px;font-size:13px}
-.uretici{color:#7d858e}
+.uretici{color:#868e97}   /* 1.2-13: #7d858e alt bilgi zemininde 4.42:1 idi; 4.99:1 */
 .site-alt .ad-slot{margin-bottom:26px}
 
 .cookie-bar{position:fixed;left:0;right:0;bottom:0;background:var(--renk-metin);color:#fff;padding:12px 18px;display:flex;gap:14px;align-items:center;justify-content:center;flex-wrap:wrap;z-index:50;font-size:14px}
@@ -502,7 +502,10 @@ body.kart-shadow .sabit-sayfa{box-shadow:0 1px 3px rgba(0,0,0,.09)}
 .duzeltme-yayim .duzeltme-metin p:last-child{margin-bottom:0}
 
 /* Ödeme duvarı rozetleri — liste kartlarında ve haber başlığında */
-.rozet-premium{background:#b8860b;color:#fff;border-radius:3px;padding:1px 6px;font-weight:800;font-size:10px;letter-spacing:.04em}
+/* 1.2-13: #b8860b üzerinde beyaz yazı 3.25:1 idi (10px metin, AA eşiği 4.5).
+   #8a6508 ile 5.32:1. Rozet Ajan-D'nin ödeme duvarı özelliği ama stili bu
+   dosyada duruyor; parts/kilit-kutu.php'ye DOKUNULMADI. */
+.rozet-premium{background:#8a6508;color:#fff;border-radius:3px;padding:1px 6px;font-weight:800;font-size:10px;letter-spacing:.04em}
 .rozet-uye{background:rgba(127,127,127,.18);color:inherit;border-radius:3px;padding:1px 6px;font-weight:700;font-size:10px;letter-spacing:.04em}
 
 /* Kart sertleştirmesi (yerleşim denetimi).
@@ -513,3 +516,233 @@ body.kart-shadow .sabit-sayfa{box-shadow:0 1px 3px rgba(0,0,0,.09)}
 .kart-kategori{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box}
 .kart-govde{min-width:0}
 .kart-sirali .kart-kategori,.kart-sirali .kart-baslik{max-width:calc(100% - 30px)}
+
+/* ============================================================================
+   OKUMA AYARLARI VE KARANLIK MOD (1.2-13)
+   ----------------------------------------------------------------------------
+   NEDEN dosyanın SONUNDA ve ekleme olarak: yukarıdaki açık palet kuralları
+   olduğu gibi duruyor, koyu mod yalnız üzerine biniyor. Böylece açık modda
+   gerileme riski yok ve koyu paleti tek blokta okuyup ölçebiliyoruz.
+
+   NEDEN `html[data-goruntu="koyu"]` ve @media DEĞİL: "sistem" seçimi
+   parts/okuma-bas.php içindeki satır içi betikte çözülüp `data-goruntu`
+   özniteliğine yazılıyor. Aksi hâlde her koyu kuralın bir de
+   @media(prefers-color-scheme:dark) kopyası olurdu ve iki kopya zamanla
+   birbirinden ayrılırdı. JavaScript kapalıysa yalnız DEĞİŞKENLER için
+   en alttaki @media yedeği devrede kalır.
+
+   Özgüllük notu: theme_css_vars() `:root{…}` bloğunu stylesheet'ten SONRA
+   satır içi basıyor (CONTRACTS §5.5). Bu yüzden koyu değerler `:root`a
+   yazılamaz; `html[…] body` (0,1,2) seçicisi gerekiyor.
+   ============================================================================ */
+
+/* ------------------------------------------------- yazı ölçeği (3 kademe) */
+/* Yalnız haber gövdesini ölçekler; başlık/menü/kart düzeni sabit kalır ki
+   ölçek değişimi yerleşimi bozmasın. */
+:root{--okuma-olcek:1}
+html[data-olcek="kucuk"]{--okuma-olcek:.9}
+html[data-olcek="orta"] {--okuma-olcek:1}
+html[data-olcek="buyuk"]{--okuma-olcek:1.18}
+
+/* Satır genişliği 72ch: 850px'lik sütunda 17px ile satır başına ~110 karakter
+   düşüyordu (okunabilir aralık 60–75). */
+.haber-govde{font-size:calc(17px * var(--okuma-olcek));max-width:72ch}
+@media(max-width:480px){.haber-govde{font-size:calc(16px * var(--okuma-olcek))}}
+
+/* ------------------------------------------------------- okuma ayarı kutusu */
+/* JavaScript kapalıyken kutu HİÇ gösterilmez: seçim uygulanamayacağı için
+   çalışmayan bir denetim olurdu. İşareti <head> betiği koyar (okuma-bas.php). */
+.okuma-ayar{display:none;position:relative}
+html[data-okuma="1"] .okuma-ayar{display:inline-flex}
+.okuma-ayar-kutu{position:relative}
+.okuma-ayar-kutu>summary{
+  list-style:none;cursor:pointer;-webkit-user-select:none;user-select:none;
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:38px;min-height:32px;padding:2px 10px;
+  border:1px solid var(--renk-cizgi);border-radius:20px;
+  background:var(--renk-yuzey);color:var(--renk-metin);
+  font-size:14px;font-weight:700;line-height:1.2;
+}
+.okuma-ayar-kutu>summary::-webkit-details-marker{display:none}
+.okuma-ayar-kutu>summary:hover{border-color:var(--renk-vurgu);color:var(--renk-vurgu)}
+.okuma-ayar-kutu[open]>summary{border-color:var(--renk-vurgu)}
+.okuma-ayar-panel{
+  position:absolute;z-index:70;top:calc(100% + 6px);left:0;min-width:236px;
+  background:var(--renk-yuzey);color:var(--renk-metin);
+  border:1px solid var(--renk-cizgi);border-radius:var(--kose);
+  box-shadow:0 10px 28px rgba(0,0,0,.16);padding:12px 14px 10px;
+}
+.okuma-ayar-grup{border:0;margin:0 0 10px;padding:0}
+.okuma-ayar-grup legend{padding:0;font-size:12px;font-weight:700;color:var(--renk-soluk);
+  text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.okuma-ayar-secenek{display:flex;gap:6px;flex-wrap:wrap}
+.okuma-ayar-secenek label{
+  display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+  border:1px solid var(--renk-cizgi);border-radius:var(--kose);
+  padding:6px 11px;font-size:13px;font-weight:600;line-height:1.3;min-height:32px;
+}
+.okuma-ayar-secenek input{margin:0;accent-color:var(--renk-vurgu)}
+.okuma-ayar-secenek label:hover{border-color:var(--renk-vurgu)}
+.okuma-ayar-secenek input:checked+span{color:var(--renk-vurgu)}
+.okuma-ayar-not{margin:0;font-size:11.5px;line-height:1.45;color:var(--renk-soluk)}
+/* Alt bilgideki ikinci örnek: panel yukarı açılır. */
+.alt-okuma{margin:0 0 14px}
+.alt-okuma .okuma-ayar-panel{top:auto;bottom:calc(100% + 6px)}
+/* Dar ekranda panel alttan açılan bir levha olur. NEDEN: 420px'te düğme meta
+   satırının solunda duruyor; sağa hizalı mutlak panel viewport'un SOLUNDAN
+   92px taşıyordu (ölçüldü). Sabit konumda taşma matematiksel olarak imkânsız. */
+@media(max-width:560px){
+  .okuma-ayar-panel{
+    position:fixed;left:12px;right:12px;top:auto;bottom:12px;
+    width:auto;min-width:0;z-index:120;
+  }
+  .alt-okuma .okuma-ayar-panel{top:auto;bottom:12px}
+}
+@media print{.okuma-ayar{display:none!important}}
+
+/* ============================================================ KOYU PALET */
+/* Ölçülen kontrast oranları (WCAG 2.1, normal metin eşiği 4.5:1):
+     metin #e7ebf0 / zemin #14171c ....... 15.00
+     metin #e7ebf0 / yüzey #1c2027 ....... 13.65
+     soluk #a5b0bd / yüzey #1c2027 ........ 7.43
+     spot  #c3ccd6 / yüzey #1c2027 ....... 10.06
+   Marka renkleri (--renk-ana / --renk-vurgu) yayıncı ayarıdır; koyu zeminde
+   OKUNACAK METİN için color-mix ile açılır, ölçülemeyen varsayım yapmamak
+   adına ölçülmüş bir yedek değer de yazılır (varsayılan palet için 6.63 ve
+   5.87). Yayıncı marka rengini değiştirirse koyu kontrast yeniden ölçülmeli. */
+html[data-goruntu="koyu"]{color-scheme:dark}
+html[data-goruntu="acik"]{color-scheme:light}
+
+html[data-goruntu="koyu"] body{
+  --renk-zemin:#14171c;
+  --renk-yuzey:#1c2027;
+  --renk-metin:#e7ebf0;
+  --renk-soluk:#a5b0bd;
+  --renk-cizgi:#2c323b;
+  --renk-alt:#0f1216;
+  --renk-spot:#c3ccd6;
+  --renk-girdi:#171b21;
+  --renk-uzeri:#232830;
+  --renk-gorsel:#22262c;
+  --renk-uyari-z:#3a2f11; --renk-uyari-m:#f0cf7a;
+  --renk-bilgi-z:#1b2836;
+  --renk-tekzip-z:#33201e;
+  --renk-ok-z:#14301f;   --renk-ok-c:#2f6b47;   --renk-ok-m:#9fe0b4;
+  --renk-hata-z:#3a1d1d; --renk-hata-c:#7a4040; --renk-hata-m:#f5b4b4;
+  --renk-ana-metin:#dc928a;
+  --renk-vurgu-metin:#849eb5;
+}
+@supports (color: color-mix(in srgb, red 50%, white)){
+  html[data-goruntu="koyu"] body{
+    --renk-ana-metin:color-mix(in srgb, var(--renk-ana) 55%, #ffffff);
+    --renk-vurgu-metin:color-mix(in srgb, var(--renk-vurgu) 55%, #ffffff);
+  }
+}
+
+/* --- yüzeyler ve çizgiler --------------------------------------------- */
+html[data-goruntu="koyu"] .skip:focus{background:var(--renk-yuzey);color:var(--renk-metin)}
+html[data-goruntu="koyu"] .site-ust{background:var(--renk-yuzey)}
+html[data-goruntu="koyu"] .kart-gorsel{background:var(--renk-gorsel)}
+html[data-goruntu="koyu"] .serit-liste a:hover{background:var(--renk-uzeri)}
+html[data-goruntu="koyu"] .arama input[type=search],
+html[data-goruntu="koyu"] .yorum-form input,
+html[data-goruntu="koyu"] .yorum-form textarea,
+html[data-goruntu="koyu"] .duzeltme-form input,
+html[data-goruntu="koyu"] .duzeltme-form textarea,
+html[data-goruntu="koyu"] .arama-genis input[type=search],
+html[data-goruntu="koyu"] .duzeltme{background:var(--renk-girdi);color:var(--renk-metin)}
+html[data-goruntu="koyu"] .arama-oneri li a:hover,
+html[data-goruntu="koyu"] .arama-oneri li.secili a,
+html[data-goruntu="koyu"] .pagination a:hover{background:var(--renk-uzeri)}
+html[data-goruntu="koyu"] .etiketler a{background:var(--renk-uzeri);color:var(--renk-vurgu-metin)}
+
+/* --- koyu zemin üstünde marka rengiyle YAZILAN metinler ---------------- */
+html[data-goruntu="koyu"] .blok-tumu,
+html[data-goruntu="koyu"] .kaynak a,
+html[data-goruntu="koyu"] .haber-govde a,
+html[data-goruntu="koyu"] .kirinti a,
+html[data-goruntu="koyu"] .hava-derece,
+html[data-goruntu="koyu"] .kaydet-dugme:hover{color:var(--renk-vurgu-metin)}
+html[data-goruntu="koyu"] .sondakika-liste time{color:var(--renk-ana-metin)}
+html[data-goruntu="koyu"] .spot,
+html[data-goruntu="koyu"] .haber-govde blockquote{color:var(--renk-spot)}
+html[data-goruntu="koyu"] .rozet-ai-uzun{background:var(--renk-bilgi-z);color:var(--renk-vurgu-metin)}
+html[data-goruntu="koyu"] .haber-govde .ai-notu{background:var(--renk-bilgi-z)}
+html[data-goruntu="koyu"] .guncelleme,
+html[data-goruntu="koyu"] .haber-govde .duzeltme,
+html[data-goruntu="koyu"] .haber-govde .guncelleme{background:var(--renk-uyari-z);color:var(--renk-uyari-m)}
+html[data-goruntu="koyu"] .duzeltme-serit,
+html[data-goruntu="koyu"] .duzeltme-yayim{background:var(--renk-tekzip-z)}
+html[data-goruntu="koyu"] .duzeltme-oge{border-top-color:var(--renk-cizgi)}
+html[data-goruntu="koyu"] .paylas-sonuc{color:var(--renk-ok-m)}
+
+/* --- marka renginin METİN olarak kullanıldığı yerler -------------------- */
+/* NEDEN --renk-ana / --renk-vurgu ezilmiyor: ikisi de yayıncının theme.json
+   ayarı. Marka ZEMİN olarak kullanıldığında (rozet, düğme) üstündeki beyaz
+   yazı koyu modda da geçerli kalıyor; sorun marka renginin koyu zemin üstünde
+   METİN olarak kullanıldığı yerlerde. Yalnız orada açılmış türevi kullanılır. */
+html[data-goruntu="koyu"] .icerik-kilit .dugme.ghost{color:var(--renk-ana-metin);border-color:var(--renk-ana-metin)}
+html[data-goruntu="koyu"] .icerik-kilit[data-kilit="premium"] .dugme.ghost{color:var(--renk-vurgu-metin);border-color:var(--renk-vurgu-metin)}
+
+/* --- --renk-metin'i ZEMİN olarak kullanan ögeler ----------------------- */
+/* Koyu modda --renk-metin açık renge döndüğü için bunlar "beyaz üstüne beyaz"
+   olurdu; kendi koyu zeminlerine sabitleniyorlar. */
+html[data-goruntu="koyu"] .ana-menu,
+html[data-goruntu="koyu"] .piyasa-serit,
+html[data-goruntu="koyu"] .cookie-bar{background:var(--renk-alt)}
+html[data-goruntu="koyu"] .arama button,
+html[data-goruntu="koyu"] .arama-genis button{background:var(--renk-alt);color:var(--renk-metin)}
+
+/* --- kilit kutusu ve formlar ------------------------------------------ */
+html[data-goruntu="koyu"] .icerik-kilit{
+  background:linear-gradient(180deg,var(--renk-yuzey) 0%,var(--renk-zemin) 100%);
+  box-shadow:0 6px 22px rgba(0,0,0,.45);
+}
+html[data-goruntu="koyu"] .icerik-kilit::before{
+  background:linear-gradient(180deg,rgba(20,23,28,0),var(--renk-yuzey));
+}
+html[data-goruntu="koyu"] .form-sonuc{background:var(--renk-uzeri)}
+html[data-goruntu="koyu"] .form-sonuc.ok{background:var(--renk-ok-z);border-color:var(--renk-ok-c);color:var(--renk-ok-m)}
+html[data-goruntu="koyu"] .form-sonuc.err{background:var(--renk-hata-z);border-color:var(--renk-hata-c);color:var(--renk-hata-m)}
+html[data-goruntu="koyu"] body.kart-shadow .kart,
+html[data-goruntu="koyu"] body.kart-shadow .haber,
+html[data-goruntu="koyu"] body.kart-shadow .sabit-sayfa{box-shadow:0 1px 3px rgba(0,0,0,.5)}
+html[data-goruntu="koyu"] .telif{border-top-color:#2a2f36}
+html[data-goruntu="koyu"] .okuma-ayar-panel{box-shadow:0 10px 28px rgba(0,0,0,.55)}
+html[data-goruntu="koyu"] .okuma-ayar-secenek input:checked+span,
+html[data-goruntu="koyu"] .okuma-ayar-kutu>summary:hover{color:var(--renk-vurgu-metin)}
+
+/* JavaScript kapalıyken sistem tercihi yine de okunsun: yalnız DEĞİŞKENLER.
+   Bileşen düzeltmeleri yukarıda data-goruntu'ya bağlı; JS'siz tarayıcıda
+   palet doğru, birkaç rozet/zemin ayrıntısı eksik kalır. */
+@media (prefers-color-scheme: dark){
+  html[data-tema="sistem"]{color-scheme:dark}
+  html[data-tema="sistem"] body{
+    --renk-zemin:#14171c; --renk-yuzey:#1c2027; --renk-metin:#e7ebf0;
+    --renk-soluk:#a5b0bd; --renk-cizgi:#2c323b; --renk-alt:#0f1216;
+  }
+}
+
+/* Yazdırmada okur tercihi geçersiz: kâğıt her zaman açık ve tek ölçek. */
+@media print{
+  :root{--okuma-olcek:1}
+  .haber-govde{font-size:12pt;max-width:none}
+}
+
+/* Hareketi azalt: görünüm/ölçek değiştirirken geçiş animasyonu olmasın.
+   NEDEN: kart başlıklarında `transition:color`, kart görsellerinde
+   `transition:transform/opacity` var; koyu moda geçiş bunları hep birden
+   tetikliyor ve hareketten rahatsız olan okur için ekran "dalgalanıyor".
+   Projede aynı saygı manşet şeridinde de gösteriliyor. */
+@media (prefers-reduced-motion: reduce){
+  .kart-baslik,.kart-gorsel img,.kart,.kart-bag,.ana-menu,
+  .kaydet-dugme,.paylas-dugme,.dugme,
+  .okuma-ayar-kutu>summary,.okuma-ayar-secenek label{
+    transition:none!important;
+    animation:none!important;
+  }
+}
+
+/* Klavye odak halkası koyu modda görünür kalmalı: --renk-vurgu (#1f4e79) koyu
+   zeminde 1.9:1 ile kayboluyordu; açılmış türev 6.45:1 (WCAG 1.4.11 eşiği 3:1). */
+html[data-goruntu="koyu"] :focus-visible{outline-color:var(--renk-vurgu-metin)}

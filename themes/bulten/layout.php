@@ -9,7 +9,16 @@ if (!defined('MANSET_BOOTSTRAPPED')) { exit; }
 $sidebarPos = theme_setting('sidebar_position', 'none');
 $karanlik   = theme_dark_mode();
 ?><!doctype html>
-<html lang="tr"<?= $karanlik ? ' data-tema="karanlik"' : '' ?>>
+<?php
+/* Okuma tercihleri (1.2-13): sunucu YALNIZ varsayılanı basar — okurun seçimi
+   localStorage'da ve <head>'deki `okuma-bas` betiğiyle uygulanır. Böylece HTML
+   tüm anonim ziyaretçiler için aynı kalır ve sayfa önbelleği bozulmaz.
+   `karanlik`/`aydinlik` gövde sınıfı yöneticinin site geneli seçimidir; okurun
+   seçimi ondan daha özgül seçicilerle (html[data-goruntu=…] body) üzerine biner. */
+$okumaTema = $karanlik ? 'koyu' : 'sistem';
+$okumaGoruntu = $karanlik ? 'koyu' : 'acik';
+?>
+<html lang="tr" data-tema="<?= esc($okumaTema) ?>" data-goruntu="<?= esc($okumaGoruntu) ?>" data-olcek="orta">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -18,6 +27,7 @@ $karanlik   = theme_dark_mode();
 <?= theme_font_link() ?>
 <link rel="stylesheet" href="<?= esc(theme_url('style.css')) ?>?v=<?= esc(MANSET_VERSION) ?>">
 <style><?= theme_css_vars() ?><?= theme_custom_css() ?></style>
+<?php part('okuma-bas'); ?>
 </head>
 <body class="tema-bulten kenar-<?= esc($sidebarPos) ?><?= $karanlik ? ' karanlik' : '' ?><?= theme_setting('buyuk_gorsel', '1') === '1' ? ' buyuk-gorsel' : '' ?>">
 

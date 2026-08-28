@@ -182,29 +182,112 @@ function seo_page_count(array $v) {
 
 // ============================================================ tekil üstveriler
 
+/**
+ * Başlık şablonlarının varsayılanları (panelde `seo_title_tpl_*` ile ezilir).
+ *
+ * Yer tutucular — hepsi her şablonda kullanılabilir, karşılığı olmayan
+ * yer tutucu çıktıdan SESSİZCE atılır (bkz. seo_apply_template()):
+ *
+ *   %site%      Site adı
+ *   %slogan%    Site sloganı (yoksa açıklamanın ilk cümlesi)
+ *   %baslik%    Haberin / sabit sayfanın başlığı
+ *   %kategori%  Kategori adı
+ *   %etiket%    Etiket adı
+ *   %arama%     Arama terimi
+ *   %sayfa%     'Sayfa N' (1. sayfada boş)
+ *
+ * @return array kind => şablon
+ */
+function seo_title_templates() {
+    $var = [
+        'home'     => '%site% — %slogan%',
+        'post'     => '%baslik% — %site%',
+        'category' => '%kategori% Haberleri — %site%',
+        'tag'      => '%etiket% Etiketli Haberler — %site%',
+        'search'   => '"%arama%" için arama sonuçları — %site%',
+    ];
+    foreach ($var as $k => $def) {
+        $custom = trim((string)setting('seo_title_tpl_' . $k, ''));
+        if ($custom !== '') { $var[$k] = $custom; }
+    }
+    return $var;
+}
+
+/**
+ * Şablonu doldurur. Boş kalan yer tutucular ve onlardan artan ayraçlar temizlenir:
+ * slogansız bir sitede '%site% — %slogan%' şablonu ' — ' ile bitmez.
+ */
+function seo_apply_template($tpl, array $vars) {
+    $map = [];
+    foreach ($vars as $k => $val) { $map['%' . $k . '%'] = seo_clean_text($val); }
+    $out = strtr((string)$tpl, $map);
+    // Tanınmayan yer tutucu (yazım hatası ya da başka şablonun anahtarı) basılmaz.
+    $out = (string)preg_replace('/%[a-z_]+%/u', '', $out);
+    $out = (string)preg_replace('/\s+/u', ' ', $out);
+    // İçi boşalmış tırnak / parantez çifti ÖNCE atılır: ayraç kırpması onların
+    // ardındaki ' — ' parçasını ancak bundan sonra görebilir.
+    $out = (string)preg_replace('/["“”]\s*["“”]|\(\s*\)|\[\s*\]/u', '', $out);
+    // Ardışık ve baştaki/sondaki ayraçlar
+    $out = (string)preg_replace('/(\s*[—\-–|·]\s*){2,}/u', ' — ', $out);
+    $out = trim($out, " \t\n\r—-–|·");
+    return trim((string)preg_replace('/\s+/u', ' ', $out));
+}
+
 /** Sayfa başlığı (<title> ve og:title tabanı). */
 function seo_title(array $ctx) {
     $v = seo_view($ctx);
     $site = (string)site('title');
     $d = seo_meta_defaults();
+    $tpl = seo_title_templates();
+    $sayfa = $v['page'] > 1 ? 'Sayfa ' . (int)$v['page'] : '';
 
     switch ($v['kind']) {
         case 'post':
             $custom = seo_clean_text(arr($v['post'], 'seo_title', ''));
             $title = $custom !== ''
                 ? $custom
-                : seo_clean_text(arr($v['post'], 'title', '')) . ' — ' . $site;
+                : seo_apply_template($tpl['post'], [
+                    'baslik' => arr($v['post'], 'title', ''),
+                    'site'   => $site,
+                    'slogan' => $d['slogan'],
+                    'sayfa'  => '',
+                  ]);
             break;
         case 'category':
+            // Kategorinin kendi SEO başlığı şablonu EZER (019 göçü).
+            $custom = seo_clean_text(arr($v['category'], 'seo_title', ''));
             $name = seo_clean_text(arr($v['category'], 'name', ''));
-            $title = ($name !== '' ? $name . ' Haberleri' : 'Kategori') . ' — ' . $site;
+            $title = $custom !== '' ? $custom : seo_apply_template($tpl['category'], [
+                'kategori' => $name !== '' ? $name : 'Kategori',
+                'baslik'   => $name,
+                'site'     => $site,
+                'slogan'   => $d['slogan'],
+                'sayfa'    => $sayfa,
+            ]);
+            if ($custom !== '' && $sayfa !== '') { $title .= ' — ' . $sayfa; }
             break;
         case 'tag':
-            $title = ($v['term'] !== '' ? $v['term'] . ' Etiketli Haberler' : 'Etiket') . ' — ' . $site;
+            $term = $v['term'];
+            $meta = seo_tag_meta($term);
+            $custom = seo_clean_text(arr($meta, 'seo_title', ''));
+            $title = $custom !== '' ? $custom : seo_apply_template($tpl['tag'], [
+                'etiket' => $term !== '' ? $term : 'Etiket',
+                'baslik' => $term,
+                'site'   => $site,
+                'slogan' => $d['slogan'],
+                'sayfa'  => $sayfa,
+            ]);
+            if ($custom !== '' && $sayfa !== '') { $title .= ' — ' . $sayfa; }
             break;
         case 'search':
             $title = $v['term'] !== ''
-                ? '"' . $v['term'] . '" için arama sonuçları — ' . $site
+                ? seo_apply_template($tpl['search'], [
+                    'arama'  => $v['term'],
+                    'baslik' => $v['term'],
+                    'site'   => $site,
+                    'slogan' => $d['slogan'],
+                    'sayfa'  => $sayfa,
+                  ])
                 : 'Arama — ' . $site;
             break;
         case 'page':
@@ -215,7 +298,13 @@ function seo_title(array $ctx) {
             $title = 'Sayfa bulunamadı — ' . $site;
             break;
         default:
-            $title = $d['title'];
+            $title = seo_apply_template($tpl['home'], [
+                'site'   => $site,
+                'slogan' => $d['slogan'],
+                'baslik' => $site,
+                'sayfa'  => $sayfa,
+            ]);
+            if ($title === '') { $title = $d['title']; }
     }
     return seo_trim($title, (int)$d['title_limit']);
 }
@@ -253,13 +342,20 @@ function seo_description(array $ctx) {
             }
             break;
         case 'category':
-            $name = seo_clean_text(arr($v['category'], 'name', ''));
-            $text = ($name !== '' ? $name : 'Bu') . ' kategorisindeki son dakika haberleri, '
-                  . 'güncel gelişmeler ve analizler ' . $site . ' sayfasında.';
+            // Kategorinin kendi SEO açıklaması (019 göçü) kalıplı metni EZER.
+            $text = seo_clean_text(arr($v['category'], 'seo_desc', ''));
+            if ($text === '') {
+                $name = seo_clean_text(arr($v['category'], 'name', ''));
+                $text = ($name !== '' ? $name : 'Bu') . ' kategorisindeki son dakika haberleri, '
+                      . 'güncel gelişmeler ve analizler ' . $site . ' sayfasında.';
+            }
             break;
         case 'tag':
-            $text = ($v['term'] !== '' ? $v['term'] : 'Bu etiket') . ' etiketiyle ilişkili tüm haberler ve '
-                  . 'güncel gelişmeler ' . $site . ' arşivinde.';
+            $text = seo_clean_text(arr(seo_tag_meta($v['term']), 'seo_desc', ''));
+            if ($text === '') {
+                $text = ($v['term'] !== '' ? $v['term'] : 'Bu etiket') . ' etiketiyle ilişkili tüm haberler ve '
+                      . 'güncel gelişmeler ' . $site . ' arşivinde.';
+            }
             break;
         case 'search':
             $text = $v['term'] !== ''
@@ -308,7 +404,9 @@ function seo_canonical(array $ctx) {
 function seo_robots(array $ctx) {
     $v = seo_view($ctx);
     if ($v['kind'] === 'search' || $v['kind'] === 'notfound') { return 'noindex,follow'; }
-    if ($v['page'] > 1) { return 'noindex,follow'; }
+    // Sayfalı listeler: varsayılan noindex (ince içerik). Arşiv keşfi isteyen
+    // yayıncı `seo_paged_noindex` ayarını kapatıp 2+ sayfaları indekse açabilir.
+    if ($v['page'] > 1 && setting('seo_paged_noindex', '1') !== '0') { return 'noindex,follow'; }
     return 'index,follow';
 }
 
@@ -375,7 +473,39 @@ function seo_jsonld_script(array $data) {
     return '<script type="application/ld+json">' . $json . '</script>' . "\n";
 }
 
-/** Yayıncı (Organization). Logo yoksa logo alanı hiç basılmaz. */
+/**
+ * Sosyal profil adresleri (Organization.sameAs).
+ *
+ * Kaynak: `seo_same_as` ayarı — satır başına bir adres. Künyede sosyal profil
+ * alanı YOKTUR (bkz. kunye_field_defs()), bu yüzden bilgi künyeden okunamaz;
+ * kimlik bilgilerinin künyeden geldiği yer aşağıdaki seo_publisher_node().
+ *
+ * Yalnız http(s) kabul edilir: `javascript:` ya da `data:` bir JSON-LD alanında
+ * zararsız görünse de, aynı değer panelde bağlantı olarak basılırsa değildir.
+ *
+ * @return array benzersiz, en çok 12 adres
+ */
+function seo_same_as() {
+    $raw = (string)setting('seo_same_as', '');
+    $raw = str_replace(["\r\n", "\r", ',', ' '], "\n", $raw);
+    $out = [];
+    foreach (explode("\n", $raw) as $line) {
+        $u = trim($line);
+        if ($u === '' || !preg_match('#^https?://[^\s<>"\']+$#i', $u)) { continue; }
+        if (mb_strlen($u) > 300) { continue; }
+        $out[$u] = true;
+        if (count($out) >= 12) { break; }
+    }
+    return array_keys($out);
+}
+
+/**
+ * Yayıncı (Organization). Logo yoksa logo alanı hiç basılmaz.
+ *
+ * Kimlik alanları KÜNYEDEN beslenir (inc/kunye.php salt okunur): ticari unvan,
+ * adres, telefon, e-posta ve vergi/MERSİS numarası zaten Basın Kanunu m.4 için
+ * toplanıyor; ikinci kez sorulması yayıncıyı iki yerde güncellemeye zorlardı.
+ */
 function seo_publisher_node() {
     $node = [
         '@type' => 'Organization',
@@ -389,6 +519,36 @@ function seo_publisher_node() {
         if ($dim) { $img['width'] = $dim['width']; $img['height'] = $dim['height']; }
         $node['logo'] = $img;
     }
+
+    $unvan = seo_clean_text(setting('kunye_ticaret_unvani', ''));
+    if ($unvan !== '') { $node['legalName'] = $unvan; }
+
+    $tel = seo_clean_text(setting('kunye_telefon', ''));
+    if ($tel !== '') { $node['telephone'] = $tel; }
+
+    $eposta = seo_clean_text(setting('kunye_eposta', ''));
+    if ($eposta !== '' && strpos($eposta, '@') !== false) { $node['email'] = $eposta; }
+
+    $adres = seo_clean_text(setting('kunye_adres', ''));
+    if ($adres !== '') {
+        $node['address'] = [
+            '@type'          => 'PostalAddress',
+            'streetAddress'  => seo_trim($adres, 200),
+            'addressCountry' => 'TR',
+        ];
+    }
+
+    $mersis = seo_clean_text(setting('kunye_mersis', ''));
+    $vergi  = seo_clean_text(setting('kunye_vergi_no', ''));
+    if ($mersis !== '') {
+        $node['identifier'] = ['@type' => 'PropertyValue', 'name' => 'MERSIS', 'value' => $mersis];
+    } elseif ($vergi !== '') {
+        $node['identifier'] = ['@type' => 'PropertyValue', 'name' => 'VKN', 'value' => $vergi];
+    }
+
+    $same = seo_same_as();
+    if ($same) { $node['sameAs'] = $same; }
+
     return $node;
 }
 
@@ -609,6 +769,13 @@ function seo_render_head(array $ctx = []) {
     $out  = '<title>' . esc($title) . '</title>' . "\n";
     $out .= seo_meta_name('description', $desc);
     $out .= seo_meta_name('robots', seo_robots($ctx));
+
+    // --- arama motoru site doğrulama etiketleri
+    // Bu alan olmadan yayıncılar doğrulama kodunu ham HTML reklam slotuna
+    // ya da tema özel CSS'ine sıkıştırıyordu; ikisi de yanlış yer.
+    foreach (seo_verification_metas() as $ad => $deger) {
+        $out .= seo_meta_name($ad, $deger);
+    }
     if ($canon !== '') { $out .= '<link rel="canonical" href="' . esc($canon) . '">' . "\n"; }
 
     // --- sayfalı listelerde prev/next
@@ -662,6 +829,10 @@ function seo_render_head(array $ctx = []) {
     // --- besleme bağlantıları
     $out .= '<link rel="alternate" type="application/rss+xml" title="'
           . esc($d['site_name'] . ' — Tüm Haberler') . '" href="' . esc($d['feed_url']) . '">' . "\n";
+    $out .= '<link rel="alternate" type="application/feed+json" title="'
+          . esc($d['site_name'] . ' — JSON Feed') . '" href="' . esc($d['feed_url'] . '?tur=json') . '">' . "\n";
+    $hub = seo_websub_hub();
+    if ($hub !== '') { $out .= '<link rel="hub" href="' . esc($hub) . '">' . "\n"; }
     if ($v['kind'] === 'category' && $v['category']) {
         $catSlug = (string)arr($v['category'], 'slug', '');
         if ($catSlug !== '') {
@@ -811,3 +982,693 @@ function seo_sync_slug_history(int $limit = 500) {
     }
     return $added;
 }
+
+// ============================================================ doğrulama etiketleri
+
+/**
+ * Arama motoru site doğrulama meta etiketleri (ad => içerik).
+ * Boş ayarlar hiç basılmaz.
+ */
+function seo_verification_metas() {
+    $map = [
+        'google-site-verification' => 'seo_verify_google',
+        'msvalidate.01'            => 'seo_verify_bing',
+        'yandex-verification'      => 'seo_verify_yandex',
+    ];
+    $out = [];
+    foreach ($map as $ad => $anahtar) {
+        $v = trim((string)setting($anahtar, ''));
+        // Doğrulama kodları alfanümeriktir; başka bir şey gelirse hiç basılmaz.
+        if ($v === '' || !preg_match('/^[A-Za-z0-9_\-\.=]{8,200}$/', $v)) { continue; }
+        $out[$ad] = $v;
+    }
+    return $out;
+}
+
+// ============================================================ etiket üstverisi
+
+/** `tag_seo` tablosu kurulu mu? (019 göçü uygulanmadan sessiz kalır) */
+function seo_tag_seo_ready() {
+    static $ready = null;
+    if ($ready !== null) { return $ready; }
+    try { qv('SELECT 1 FROM tag_seo LIMIT 1'); return $ready = true; }
+    catch (Throwable $e) { return $ready = false; }
+}
+
+/**
+ * Etiketin özel SEO üstverisi.
+ * Etiketler serbest metindir ve kendi tabloları yoktur; eşleme slugify() iledir.
+ *
+ * @return array ['slug','label','seo_title','seo_desc'] — kayıt yoksa boş alanlar
+ */
+function seo_tag_meta($term) {
+    static $cache = [];
+    $slug = slugify((string)$term);
+    $bos = ['slug' => $slug, 'label' => (string)$term, 'seo_title' => '', 'seo_desc' => ''];
+    if ($slug === '' || !seo_tag_seo_ready()) { return $bos; }
+    if (isset($cache[$slug])) { return $cache[$slug]; }
+    try {
+        $row = q1('SELECT slug, label, seo_title, seo_desc FROM tag_seo WHERE slug = :s', [':s' => $slug]);
+    } catch (Throwable $e) { return $bos; }
+    return $cache[$slug] = ($row ? $row : $bos);
+}
+
+/**
+ * Etiket üstverisini yazar (boş başlık + boş açıklama → kayıt silinir).
+ * @return bool
+ */
+function seo_tag_meta_save($term, $title, $desc) {
+    if (!seo_tag_seo_ready()) { return false; }
+    $slug = slugify((string)$term);
+    if ($slug === '') { return false; }
+    $title = sanitize_line((string)$title, 255);
+    $desc  = sanitize_line((string)$desc, 500);
+    $label = sanitize_line((string)$term, 190);
+    try {
+        $id = (int)qv('SELECT id FROM tag_seo WHERE slug = :s', [':s' => $slug], 0);
+        if ($title === '' && $desc === '') {
+            if ($id > 0) { q('DELETE FROM tag_seo WHERE id = :i', [':i' => $id]); }
+            return true;
+        }
+        if ($id > 0) {
+            q('UPDATE tag_seo SET label = :l, seo_title = :t, seo_desc = :d, updated_at = :u WHERE id = :i',
+                [':l' => $label, ':t' => $title, ':d' => $desc, ':u' => now(), ':i' => $id]);
+        } else {
+            q('INSERT INTO tag_seo (slug, label, seo_title, seo_desc, updated_at) VALUES (:s, :l, :t, :d, :u)',
+                [':s' => $slug, ':l' => $label, ':t' => $title, ':d' => $desc, ':u' => now()]);
+        }
+        return true;
+    } catch (Throwable $e) {
+        log_error('seo_tag_meta_save: ' . $e->getMessage());
+        return false;
+    }
+}
+
+/** Kayıtlı etiket üstverileri. */
+function seo_tag_meta_all($limit = 200) {
+    if (!seo_tag_seo_ready()) { return []; }
+    $limit = max(1, min(1000, (int)$limit));
+    try { return qa('SELECT * FROM tag_seo ORDER BY slug ASC LIMIT ' . $limit); }
+    catch (Throwable $e) { return []; }
+}
+
+// ============================================================ elle 301 yönetimi
+
+/** `redirects` tablosu kurulu mu? */
+function seo_redirects_ready() {
+    static $ready = null;
+    if ($ready !== null) { return $ready; }
+    try { qv('SELECT 1 FROM redirects LIMIT 1'); return $ready = true; }
+    catch (Throwable $e) { return $ready = false; }
+}
+
+/** Yönlendirme kurallarına kapalı yollar (kendi kendini kilitlemeyi önler). */
+function seo_redirect_reserved() {
+    return ['admin', 'install', 'api.php', 'cron.php', 'index.php', 'sitemap.php', 'rss.php',
+            'feed.php', 'robots.txt', 'probe-rewrite', 'uploads', 'assets', 'db', 'inc', 'themes'];
+}
+
+/**
+ * Kaynak yolu normalleştirir: '/Eski/Yol/?x=1' → 'Eski/Yol'
+ * Geçersizse boş dize döner.
+ */
+function seo_redirect_clean_source($path) {
+    $p = (string)$path;
+    if ($p === '') { return ''; }
+    // Tam adres yapıştırıldıysa yalnız yol kısmı alınır.
+    if (preg_match('#^https?://#i', $p)) { $p = (string)parse_url($p, PHP_URL_PATH); }
+    $p = (string)preg_replace('/[?#].*$/', '', $p);
+    $p = rawurldecode($p);
+    $p = str_replace('\\', '/', $p);
+    $p = (string)preg_replace('/[\x00-\x1F\x7F]/u', '', $p);
+    $p = trim((string)preg_replace('#/+#', '/', $p), '/');
+    if ($p === '' || strpos($p, '..') !== false) { return ''; }
+    if (mb_strlen($p) > 400) { return ''; }
+    $parcalar = explode('/', $p);
+    if (in_array(strtolower($parcalar[0]), seo_redirect_reserved(), true)) { return ''; }
+    return $p;
+}
+
+/**
+ * Hedefi normalleştirir. YALNIZ SİTE İÇİ hedef kabul edilir.
+ *
+ * KARAR (açık yönlendirme): dış adrese yönlendirme HİÇ yazılamaz — "yalnız admin
+ * yazabilir" biçiminde bir istisna da konmadı. Gerekçe:
+ *   • 301 tarayıcıda süresiz saklanır; yanlış kayıt fiilen geri alınamaz.
+ *   • Panelde veritabanı geri yükleme özelliği var (CONTRACTS §12.5): dış hedefe
+ *     izin verilseydi hazırlanmış bir yedek doğrudan alan adı kaçırmaya dönerdi.
+ *   • Yayıncının gerçek ihtiyacı olan "başka alan adına taşınma" web sunucusu
+ *     düzeyinde (.htaccess / DNS) çözülür, panelden değil.
+ * Tam adres yapıştırılırsa ana ad KENDİ adımızla eşleşmelidir; eşleşiyorsa yol
+ * kısmına indirgenir, eşleşmiyorsa reddedilir.
+ *
+ * @return string|false '' = kök, false = geçersiz
+ */
+function seo_redirect_clean_target($target) {
+    $t = trim((string)$target);
+    if ($t === '' || $t === '/') { return ''; }
+    if (preg_match('#^[a-z][a-z0-9+.\-]*:#i', $t)) {
+        // Şemalı adres: yalnız kendi http(s) kökenimiz kabul edilir.
+        if (!preg_match('#^https?://#i', $t)) { return false; }
+        $selfHost = strtolower((string)parse_url(base_url(), PHP_URL_HOST));
+        $host = strtolower((string)parse_url($t, PHP_URL_HOST));
+        if ($host === '' || $selfHost === '' || $host !== $selfHost) { return false; }
+        $path = (string)parse_url($t, PHP_URL_PATH);
+        $qs   = (string)parse_url($t, PHP_URL_QUERY);
+        $t = $path . ($qs !== '' ? '?' . $qs : '');
+    }
+    // Protokole göreli adres (//baska-site.example) dış hedeftir.
+    if (strpos($t, '//') === 0) { return false; }
+    $t = str_replace('\\', '/', $t);
+    $t = (string)preg_replace('/[\x00-\x1F\x7F]/u', '', $t);
+    $t = ltrim($t, '/');
+    if (strpos($t, '..') !== false) { return false; }
+    if (mb_strlen($t) > 400) { return false; }
+    return $t;
+}
+
+/** Yolun kural karşılığı (yoksa null). */
+function seo_redirect_find($path) {
+    if (!seo_redirects_ready()) { return null; }
+    $p = seo_redirect_clean_source($path);
+    if ($p === '') { return null; }
+    try {
+        return q1('SELECT id, src_path, target, code, active FROM redirects WHERE src_path = :s AND active = 1',
+            [':s' => $p]);
+    } catch (Throwable $e) { return null; }
+}
+
+/** Aktif kural sayısını ayara yazar — istek başına gereksiz sorguyu engeller. */
+function seo_redirect_refresh_count() {
+    if (!seo_redirects_ready()) { return 0; }
+    try { $n = (int)qv('SELECT COUNT(*) FROM redirects WHERE active = 1', [], 0); }
+    catch (Throwable $e) { return 0; }
+    setting_set('seo_redirect_count', (string)$n);
+    return $n;
+}
+
+/**
+ * Zinciri izler; DÖNGÜ ya da 5 sıçramadan uzun zincir varsa null döner.
+ * @return array|null ['target'=>string,'code'=>int,'id'=>int]
+ */
+function seo_redirect_resolve($path, $maxHops = 5) {
+    $gorulen = [];
+    $cur = seo_redirect_clean_source($path);
+    if ($cur === '') { return null; }
+    $son = null;
+    for ($i = 0; $i < $maxHops; $i++) {
+        if (isset($gorulen[$cur])) { return null; }          // döngü
+        $gorulen[$cur] = true;
+        $row = seo_redirect_find($cur);
+        if (!$row) { return $son; }
+        $hedef = (string)$row['target'];
+        $son = ['target' => $hedef, 'code' => (int)$row['code'], 'id' => (int)$row['id']];
+        if ((int)$row['code'] === 410) { return $son; }
+        $next = seo_redirect_clean_source($hedef);
+        if ($next === '' || $next === $cur) { return $son; }
+        $cur = $next;
+    }
+    return null;   // 5 sıçramada bitmeyen zincir güvenli değildir
+}
+
+/**
+ * Kural ekler / günceller.
+ * @return array ['ok'=>bool, 'error'=>string, 'id'=>int]
+ */
+function seo_redirect_save(array $in) {
+    if (!seo_redirects_ready()) {
+        return ['ok' => false, 'error' => 'Yönlendirme tablosu kurulu değil (019 göçü uygulanmamış).', 'id' => 0];
+    }
+    $id  = (int)arr($in, 'id', 0);
+    $src = seo_redirect_clean_source(arr($in, 'src_path', ''));
+    if ($src === '') {
+        return ['ok' => false, 'error' => 'Kaynak adres geçersiz. Panel, besleme ve yükleme yolları yönlendirilemez.', 'id' => 0];
+    }
+    $target = seo_redirect_clean_target(arr($in, 'target', ''));
+    if ($target === false) {
+        return ['ok' => false, 'error' => 'Hedef yalnız bu sitenin içindeki bir adres olabilir. Dış adrese yönlendirme yazılamaz.', 'id' => 0];
+    }
+    $code = (int)arr($in, 'code', 301);
+    if (!in_array($code, [301, 302, 410], true)) { $code = 301; }
+    if ($code !== 410 && $src === seo_redirect_clean_source($target)) {
+        return ['ok' => false, 'error' => 'Kaynak ve hedef aynı — bu sonsuz döngü olurdu.', 'id' => 0];
+    }
+    $active = (int)arr($in, 'active', 1) ? 1 : 0;
+    $note = sanitize_line((string)arr($in, 'note', ''), 190);
+
+    try {
+        $mevcut = q1('SELECT id FROM redirects WHERE src_path = :s', [':s' => $src]);
+        if ($mevcut && (int)$mevcut['id'] !== $id) {
+            if ($id > 0) { return ['ok' => false, 'error' => 'Bu kaynak adres için zaten bir kural var.', 'id' => 0]; }
+            $id = (int)$mevcut['id'];
+        }
+        $data = ['src_path' => $src, 'target' => $target, 'code' => $code,
+                 'active' => $active, 'note' => $note, 'updated_at' => now()];
+        if ($id > 0) {
+            db_update('redirects', $data, 'id = :i', [':i' => $id]);
+        } else {
+            $data['created_at'] = now();
+            $data['hits'] = 0;
+            $id = db_insert('redirects', $data);
+        }
+        // DÖNGÜ DENETİMİ kayıttan SONRA yapılır: kural zinciri kapatıyorsa geri alınır.
+        if ($active === 1 && $code !== 410 && seo_redirect_resolve($src) === null) {
+            q('DELETE FROM redirects WHERE id = :i', [':i' => (int)$id]);
+            seo_redirect_refresh_count();
+            return ['ok' => false, 'error' => 'Bu kural bir yönlendirme döngüsü oluşturuyor; kaydedilmedi.', 'id' => 0];
+        }
+        seo_redirect_refresh_count();
+        return ['ok' => true, 'error' => '', 'id' => (int)$id];
+    } catch (Throwable $e) {
+        log_error('seo_redirect_save: ' . $e->getMessage());
+        return ['ok' => false, 'error' => 'Kural kaydedilemedi.', 'id' => 0];
+    }
+}
+
+/** Kuralı siler. */
+function seo_redirect_delete($id) {
+    if (!seo_redirects_ready()) { return false; }
+    $id = (int)$id;
+    if ($id <= 0) { return false; }
+    try {
+        q('DELETE FROM redirects WHERE id = :i', [':i' => $id]);
+        seo_redirect_refresh_count();
+        return true;
+    } catch (Throwable $e) { return false; }
+}
+
+/** Kural listesi. */
+function seo_redirect_list($limit = 100, $offset = 0) {
+    if (!seo_redirects_ready()) { return []; }
+    $limit = max(1, min(500, (int)$limit));
+    $offset = max(0, (int)$offset);
+    try {
+        return qa('SELECT * FROM redirects ORDER BY id DESC LIMIT ' . $limit . ' OFFSET ' . $offset);
+    } catch (Throwable $e) { return []; }
+}
+
+/** Toplam kural sayısı. */
+function seo_redirect_count() {
+    if (!seo_redirects_ready()) { return 0; }
+    try { return (int)qv('SELECT COUNT(*) FROM redirects', [], 0); }
+    catch (Throwable $e) { return 0; }
+}
+
+/**
+ * İstek yolunu kurallara karşı sınar ve gerekirse yönlendirir (exit eder).
+ * Eşleşme yoksa sessizce döner.
+ *
+ * Location başlığı GÖRELİ verilir: base_url() ana adı HTTP_HOST'tan türetebiliyor;
+ * zehirli bir Host başlığı 301 ile kalıcı zarar verirdi (index.php B04 notu).
+ */
+function seo_apply_redirect($path) {
+    if ((int)setting('seo_redirect_count', '0') <= 0) { return; }
+    $hit = seo_redirect_resolve($path);
+    if (!$hit) { return; }
+    try { q('UPDATE redirects SET hits = hits + 1 WHERE id = :i', [':i' => (int)$hit['id']]); }
+    catch (Throwable $e) { }
+
+    if ((int)$hit['code'] === 410) {
+        if (!headers_sent()) {
+            http_response_code(410);
+            header('Content-Type: text/plain; charset=utf-8');
+            header('X-Robots-Tag: noindex');
+        }
+        echo "Bu içerik kalıcı olarak kaldırıldı.\n";
+        exit;
+    }
+    $to = site_path() . '/' . ltrim((string)$hit['target'], '/');
+    if (!headers_sent()) { header('Location: ' . $to, true, (int)$hit['code']); }
+    exit;
+}
+
+// ============================================================ IndexNow / ping kuyruğu
+
+/** Kuyruk tablosu kurulu mu? */
+function seo_pings_ready() {
+    static $ready = null;
+    if ($ready !== null) { return $ready; }
+    try { qv('SELECT 1 FROM seo_pings LIMIT 1'); return $ready = true; }
+    catch (Throwable $e) { return $ready = false; }
+}
+
+/** IndexNow anahtarı (yoksa üretilir). 32 haneli onaltılık. */
+function seo_indexnow_key() {
+    $k = strtolower(trim((string)setting('seo_indexnow_key', '')));
+    if (preg_match('/^[a-f0-9]{16,64}$/', $k)) { return $k; }
+    $k = bin2hex(random_bytes(16));
+    setting_set('seo_indexnow_key', $k);
+    return $k;
+}
+
+/** Anahtar dosyasının adresi (site kökünden sunulur). */
+function seo_indexnow_key_url() {
+    return base_url() . '/' . seo_indexnow_key() . '.txt';
+}
+
+function seo_indexnow_enabled() { return setting('seo_indexnow_enabled', '0') === '1'; }
+function seo_sitemap_ping_enabled() { return setting('seo_sitemap_ping', '0') === '1'; }
+
+/** WebSub hub adresi (yalnız http(s), yoksa boş). */
+function seo_websub_hub() {
+    $u = trim((string)setting('seo_websub_hub', ''));
+    if ($u === '' || !preg_match('#^https?://[^\s<>"\']+$#i', $u)) { return ''; }
+    return $u;
+}
+
+/**
+ * Site adresi dış dünyadan erişilebilir mi?
+ * localhost / özel IP ise ping GÖNDERİLMEZ: arama motoru zaten doğrulayamaz,
+ * geliştirme ve test kurulumları da boşuna ağa çıkmaz.
+ */
+function seo_ping_site_public() {
+    $host = (string)parse_url(base_url(), PHP_URL_HOST);
+    if ($host === '') { return false; }
+    if (strcasecmp($host, 'localhost') === 0) { return false; }
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        return (bool)filter_var($host, FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+    }
+    // Nokta içermeyen ad yerel ağ adıdır (ör. 'sunucu', 'localhost.localdomain' değil).
+    if (strpos($host, '.') === false) { return false; }
+    if (preg_match('/\.(test|local|localhost|invalid|example)$/i', $host)) { return false; }
+    return true;
+}
+
+/**
+ * Kuyruğa bir adres ekler. Aynı adres beklemedeyse ikinci kez yazılmaz.
+ *
+ * YAYIN ANINDA HTTP İSTEĞİ ATILMAZ: "Yayımla" düğmesine basan editör dış
+ * servisi beklemez ve servis çökerse yayın düşmez. Kuyruğu cron boşaltır.
+ *
+ * @return bool eklendi mi
+ */
+function seo_ping_enqueue($url, $kind = 'indexnow') {
+    if (!seo_pings_ready()) { return false; }
+    $url = trim((string)$url);
+    $kind = in_array($kind, ['indexnow', 'sitemap', 'websub'], true) ? $kind : 'indexnow';
+    if ($url === '' || !preg_match('#^https?://#i', $url) || mb_strlen($url) > 400) { return false; }
+    try {
+        $ayni = (int)qv('SELECT COUNT(*) FROM seo_pings WHERE kind = :k AND url = :u AND status = \'queued\'',
+            [':k' => $kind, ':u' => $url], 0);
+        if ($ayni > 0) { return false; }
+        // Kuyruk sınırı: cron kurulmamış bir sunucuda sonsuza kadar büyümesin.
+        $bekleyen = (int)qv('SELECT COUNT(*) FROM seo_pings WHERE status = \'queued\'', [], 0);
+        if ($bekleyen >= 500) { return false; }
+        q('INSERT INTO seo_pings (kind, url, status, attempts, error, created_at)
+           VALUES (:k, :u, \'queued\', 0, \'\', :c)',
+            [':k' => $kind, ':u' => $url, ':c' => now()]);
+        return true;
+    } catch (Throwable $e) {
+        log_error('seo_ping_enqueue: ' . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * Son turdan beri yayına giren haberleri kuyruğa alır.
+ *
+ * NEDEN KANCA DEĞİL: `posts.save` ucu Ajan-2'nin dosyasındadır, oraya çağrı
+ * eklenemez. Su işareti (`seo_ping_last_post_id`) ile keşif kanca kadar kesindir
+ * ve hiçbir yayın akışını yavaşlatmaz. İlk turda arşivin tamamı kuyruğa
+ * girmesin diye su işareti yalnız kurulur, hiçbir şey gönderilmez.
+ *
+ * @return int kuyruğa eklenen adres sayısı
+ */
+function seo_ping_queue_new_posts($limit = 50) {
+    if (!seo_pings_ready()) { return 0; }
+    $limit = max(1, min(200, (int)$limit));
+    try {
+        $enBuyuk = (int)qv('SELECT MAX(p.id) FROM posts p WHERE ' . published_where('p'), [':nowts' => now()], 0);
+        $isaret = (string)setting('seo_ping_last_post_id', '');
+        if ($isaret === '') {
+            setting_set('seo_ping_last_post_id', (string)$enBuyuk);
+            return 0;
+        }
+        $isaret = (int)$isaret;
+        if ($enBuyuk <= $isaret) { return 0; }
+        $rows = qa('SELECT p.id, p.slug FROM posts p WHERE ' . published_where('p') . ' AND p.id > :son
+                    ORDER BY p.id ASC LIMIT ' . $limit, [':nowts' => now(), ':son' => $isaret]);
+        $n = 0;
+        $enSon = $isaret;
+        foreach ($rows as $r) {
+            if (seo_ping_enqueue(url_post($r), 'indexnow')) { $n++; }
+            $enSon = max($enSon, (int)$r['id']);
+        }
+        setting_set('seo_ping_last_post_id', (string)$enSon);
+        return $n;
+    } catch (Throwable $e) {
+        log_error('seo_ping_queue_new_posts: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+/**
+ * HTTP isteği. IndexNow ve Google hedefleri KODDA sabittir; WebSub hub'ı ayardan
+ * gelir, bu yüzden hepsi safe_remote_url() kalkanından geçirilir.
+ *
+ * @return array ['ok'=>bool, 'code'=>int, 'error'=>string]
+ */
+function seo_http_send($url, $payload = null, $contentType = '') {
+    $url = (string)$url;
+    if (function_exists('safe_remote_url')) {
+        $guvenli = safe_remote_url($url);
+        if ($guvenli === false) { return ['ok' => false, 'code' => 0, 'error' => 'Adres reddedildi.']; }
+        $url = $guvenli;
+    }
+    $basliklar = ['User-Agent: Manset/' . MANSET_VERSION];
+    if ($contentType !== '') { $basliklar[] = 'Content-Type: ' . $contentType; }
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        $opt = [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 8,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_HTTPHEADER     => $basliklar,
+        ];
+        if ($payload !== null) { $opt[CURLOPT_POST] = true; $opt[CURLOPT_POSTFIELDS] = $payload; }
+        curl_setopt_array($ch, $opt);
+        $body = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $hata = ($body === false) ? (string)curl_error($ch) : '';
+        curl_close($ch);
+        return ['ok' => ($code >= 200 && $code < 300), 'code' => $code, 'error' => $hata];
+    }
+    if (!ini_get('allow_url_fopen')) {
+        return ['ok' => false, 'code' => 0, 'error' => 'cURL yok ve allow_url_fopen kapalı.'];
+    }
+    $ctx = ['http' => [
+        'method'        => $payload !== null ? 'POST' : 'GET',
+        'header'        => implode("\r\n", $basliklar),
+        'timeout'       => 8,
+        'ignore_errors' => true,
+    ]];
+    if ($payload !== null) { $ctx['http']['content'] = $payload; }
+    $res = @file_get_contents($url, false, stream_context_create($ctx));
+    $code = 0;
+    if (isset($http_response_header[0]) && preg_match('#\s(\d{3})\s#', (string)$http_response_header[0], $m)) {
+        $code = (int)$m[1];
+    }
+    return ['ok' => ($code >= 200 && $code < 300), 'code' => $code,
+            'error' => $res === false ? 'İstek başarısız.' : ''];
+}
+
+/** Kuyruk satırlarını sonuca göre işaretler. 3 denemede başarısız olan bırakılır. */
+function seo_ping_mark(array $ids, array $res) {
+    foreach ($ids as $id) {
+        $id = (int)$id;
+        if ($id <= 0) { continue; }
+        try {
+            if (!empty($res['ok'])) {
+                q('UPDATE seo_pings SET status = \'sent\', sent_at = :s, error = \'\', attempts = attempts + 1
+                   WHERE id = :i', [':s' => now(), ':i' => $id]);
+            } else {
+                $deneme = (int)qv('SELECT attempts FROM seo_pings WHERE id = :i', [':i' => $id], 0) + 1;
+                $durum = $deneme >= 3 ? 'failed' : 'queued';
+                q('UPDATE seo_pings SET status = :d, attempts = :a, error = :e WHERE id = :i', [
+                    ':d' => $durum, ':a' => $deneme,
+                    ':e' => sanitize_line('HTTP ' . (int)arr($res, 'code', 0) . ' ' . (string)arr($res, 'error', ''), 255),
+                    ':i' => $id,
+                ]);
+            }
+        } catch (Throwable $e) { }
+    }
+}
+
+/** Eski (gönderilmiş/atlanmış/başarısız) kuyruk satırlarını budar. */
+function seo_ping_prune($tut = 200) {
+    if (!seo_pings_ready()) { return; }
+    try {
+        $esik = (int)qv('SELECT id FROM seo_pings WHERE status <> \'queued\'
+                         ORDER BY id DESC LIMIT 1 OFFSET ' . max(0, (int)$tut), [], 0);
+        if ($esik > 0) { q('DELETE FROM seo_pings WHERE status <> \'queued\' AND id <= :i', [':i' => $esik]); }
+    } catch (Throwable $e) { }
+}
+
+/**
+ * Cron görevi: kuyruğu boşaltır.
+ * Her tur en çok 100 IndexNow adresi (tek istekte), 5 sitemap ping, 5 WebSub bildirimi.
+ *
+ * @return string tur özeti
+ */
+function seo_ping_tick() {
+    if (!seo_pings_ready()) { return 'ping: tablo yok (019 göçü uygulanmamış)'; }
+
+    $yeni = seo_ping_queue_new_posts(50);
+    if ($yeni > 0 && seo_sitemap_ping_enabled()) { seo_ping_enqueue(base_url() . '/sitemap.php', 'sitemap'); }
+    $hub = seo_websub_hub();
+    if ($yeni > 0 && $hub !== '') { seo_ping_enqueue(base_url() . '/rss.php', 'websub'); }
+
+    $bekleyen = (int)qv('SELECT COUNT(*) FROM seo_pings WHERE status = \'queued\'', [], 0);
+    if ($bekleyen === 0) { return 'ping: kuyruk boş (' . $yeni . ' yeni)'; }
+
+    if (!seo_ping_site_public()) {
+        q('UPDATE seo_pings SET status = \'skipped\', error = :e, sent_at = :s WHERE status = \'queued\'',
+            [':e' => 'Site adresi dış dünyadan erişilebilir değil.', ':s' => now()]);
+        return 'ping: ' . $bekleyen . ' adres atlandı (yerel adres)';
+    }
+
+    $ozet = [];
+
+    // ---- IndexNow (Bing / Yandex / Naver; Google IndexNow'ı desteklemiyor)
+    if (seo_indexnow_enabled()) {
+        $rows = qa('SELECT id, url FROM seo_pings WHERE kind = \'indexnow\' AND status = \'queued\'
+                    ORDER BY id ASC LIMIT 100');
+        if ($rows) {
+            $liste = [];
+            $idler = [];
+            foreach ($rows as $r) { $liste[] = (string)$r['url']; $idler[] = (int)$r['id']; }
+            $govde = json_encode([
+                'host'        => (string)parse_url(base_url(), PHP_URL_HOST),
+                'key'         => seo_indexnow_key(),
+                'keyLocation' => seo_indexnow_key_url(),
+                'urlList'     => $liste,
+            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $res = seo_http_send('https://api.indexnow.org/indexnow', $govde, 'application/json; charset=utf-8');
+            seo_ping_mark($idler, $res);
+            $ozet[] = 'IndexNow ' . count($liste) . ' adres → ' . ($res['ok'] ? 'tamam' : 'HTTP ' . $res['code']);
+        }
+    } else {
+        $n = (int)qv('SELECT COUNT(*) FROM seo_pings WHERE kind = \'indexnow\' AND status = \'queued\'', [], 0);
+        if ($n > 0) {
+            q('UPDATE seo_pings SET status = \'skipped\', error = :e, sent_at = :s
+               WHERE kind = \'indexnow\' AND status = \'queued\'',
+                [':e' => 'IndexNow kapalı.', ':s' => now()]);
+            $ozet[] = 'IndexNow kapalı, ' . $n . ' adres atlandı';
+        }
+    }
+
+    // ---- Google sitemap ping
+    foreach (qa('SELECT id, url FROM seo_pings WHERE kind = \'sitemap\' AND status = \'queued\' ORDER BY id ASC LIMIT 5') as $r) {
+        $res = seo_http_send('https://www.google.com/ping?sitemap=' . rawurlencode((string)$r['url']));
+        seo_ping_mark([(int)$r['id']], $res);
+        $ozet[] = 'sitemap ping → ' . ($res['ok'] ? 'tamam' : 'HTTP ' . $res['code']);
+    }
+
+    // ---- WebSub
+    if ($hub !== '') {
+        foreach (qa('SELECT id, url FROM seo_pings WHERE kind = \'websub\' AND status = \'queued\' ORDER BY id ASC LIMIT 5') as $r) {
+            $res = seo_http_send($hub, http_build_query(['hub.mode' => 'publish', 'hub.url' => (string)$r['url']]),
+                'application/x-www-form-urlencoded');
+            seo_ping_mark([(int)$r['id']], $res);
+            $ozet[] = 'WebSub → ' . ($res['ok'] ? 'tamam' : 'HTTP ' . $res['code']);
+        }
+    }
+
+    seo_ping_prune();
+    return 'ping: ' . ($ozet ? implode(', ', $ozet) : 'iş yok') . ' (' . $yeni . ' yeni)';
+}
+
+/** Panel için kuyruk sayaçları. */
+function seo_ping_stats() {
+    $out = ['queued' => 0, 'sent' => 0, 'failed' => 0, 'skipped' => 0];
+    if (!seo_pings_ready()) { return $out; }
+    try {
+        foreach (qa('SELECT status, COUNT(*) AS n FROM seo_pings GROUP BY status') as $r) {
+            $k = (string)$r['status'];
+            if (isset($out[$k])) { $out[$k] = (int)$r['n']; }
+        }
+    } catch (Throwable $e) { }
+    return $out;
+}
+
+/** Son kuyruk satırları (panel listesi). */
+function seo_ping_recent($limit = 20) {
+    if (!seo_pings_ready()) { return []; }
+    $limit = max(1, min(100, (int)$limit));
+    try { return qa('SELECT * FROM seo_pings ORDER BY id DESC LIMIT ' . $limit); }
+    catch (Throwable $e) { return []; }
+}
+
+// ============================================================ ön yüz kapısı
+
+/** Görsel site haritası açık mı? (sitemap.php okur) */
+function seo_sitemap_images_enabled() { return setting('seo_sitemap_images', '1') !== '0'; }
+
+/** İstek yolu — index.php route_path() ile aynı öncelik sırası. */
+function seo_request_path() {
+    if (isset($_GET['r']) && is_string($_GET['r'])) {
+        return trim((string)preg_replace('#/+#', '/', $_GET['r']), '/');
+    }
+    if (!empty($_SERVER['PATH_INFO'])) {
+        return trim((string)preg_replace('#/+#', '/', (string)$_SERVER['PATH_INFO']), '/');
+    }
+    $uri = isset($_SERVER['REQUEST_URI']) ? (string)$_SERVER['REQUEST_URI'] : '/';
+    $uri = (string)parse_url($uri, PHP_URL_PATH);
+    $script = isset($_SERVER['SCRIPT_NAME']) ? (string)$_SERVER['SCRIPT_NAME'] : '/index.php';
+    $baseDir = rtrim(str_replace('\\', '/', dirname($script)), '/');
+    if ($baseDir !== '' && $baseDir !== '/' && strpos($uri, $baseDir) === 0) {
+        $uri = substr($uri, strlen($baseDir));
+    }
+    $uri = (string)preg_replace('#^/index\.php#', '', (string)$uri);
+    return trim((string)preg_replace('#/+#', '/', (string)$uri), '/');
+}
+
+
+/**
+ * Ön yüz kapısı — index.php tarafından AÇIKÇA çağrılır.
+ *
+ * İki iş yapar:
+ *   1. IndexNow anahtar dosyasını site kökünden sunar (`/<anahtar>.txt`).
+ *   2. Elle tanımlı 301 / 302 / 410 kurallarını uygular.
+ *
+ * ÇAĞRI YERİ: index.php, modüller yüklendikten hemen sonra — yönlendirme
+ * çözülmeden ve sayfa önbelleği okunmadan önce. Taşınmış bir adres için
+ * önbellekten eski sayfanın sunulmaması buna bağlıdır.
+ *
+ * ÇEREZ: oturum açılmaz, hiçbir kod yolu `Set-Cookie` üretmez.
+ */
+function seo_front_gate() {
+    if (headers_sent()) { return; }
+    $yontem = isset($_SERVER['REQUEST_METHOD']) ? strtoupper((string)$_SERVER['REQUEST_METHOD']) : 'GET';
+    if ($yontem !== 'GET' && $yontem !== 'HEAD') { return; }
+
+    $path = seo_request_path();
+    if ($path === '') { return; }
+
+    // --- IndexNow anahtar dosyası
+    if (preg_match('/^([a-f0-9]{16,64})\.txt$/i', $path, $m)) {
+        $key = strtolower(trim((string)setting('seo_indexnow_key', '')));
+        if ($key !== '' && hash_equals($key, strtolower($m[1]))) {
+            header('Content-Type: text/plain; charset=utf-8');
+            header('X-Robots-Tag: noindex');
+            header('Cache-Control: public, max-age=86400');
+            echo $key;
+            exit;
+        }
+        return;
+    }
+
+    seo_apply_redirect($path);
+}
+
+// Cron: kuyruğu boşaltan görev. `ucuz = false` — ağa çıkar.
+if (function_exists('cron_register')) {
+    cron_register('seo_ping', 'seo_ping_tick', false);
+}
+
+// NOT: Kapı BURADAN ÇAĞRILMAZ. Çağrı index.php içinde, açıkça yapılır.
+// Yükleme anında yan etkisi olan bir modül, aynı dosyayı require eden
+// api.php / cron.php / admin panelinde de sessizce çalışırdı.

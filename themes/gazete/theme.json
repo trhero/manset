@@ -12,7 +12,7 @@
     { "key": "color_bg",        "label": "Zemin",           "type": "color", "default": "#f4f5f7", "css_var": "renk-zemin", "group": "Renkler" },
     { "key": "color_surface",   "label": "Kart zemini",     "type": "color", "default": "#ffffff", "css_var": "renk-yuzey", "group": "Renkler" },
     { "key": "color_text",      "label": "Metin",           "type": "color", "default": "#1c1f23", "css_var": "renk-metin", "group": "Renkler" },
-    { "key": "color_muted",     "label": "İkincil metin",   "type": "color", "default": "#6b7280", "css_var": "renk-soluk", "group": "Renkler" },
+    { "key": "color_muted",     "label": "İkincil metin",   "type": "color", "default": "#666d78", "css_var": "renk-soluk", "group": "Renkler" },
     { "key": "color_line",      "label": "Çizgi rengi",     "type": "color", "default": "#e3e7ec", "css_var": "renk-cizgi", "group": "Renkler" },
     { "key": "color_footer",    "label": "Alt bilgi zemini","type": "color", "default": "#1c1f23", "css_var": "renk-alt", "group": "Renkler" },
 

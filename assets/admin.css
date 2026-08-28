@@ -293,3 +293,25 @@ body.giris-sayfasi{display:flex;align-items:center;justify-content:center;min-he
 /* Üstveri kipi (1.1-02): SEO editörü yalnız üstveriyi düzenler, gövde kartları kilitli görünür. */
 .ustveri-kilit{opacity:.62}
 .ustveri-kilit input,.ustveri-kilit textarea,.ustveri-kilit select{background:var(--cizgi);cursor:not-allowed}
+
+/* ------------------------------------------------- menü rozeti (1.2-02) */
+/* `.yan-menu a` zaten flex satırdır: rozet `margin-left:auto` ile sağa dayanır,
+   ikon ve etiketle çakışmaz. `flex-wrap: wrap` bilinçli — "Düzeltme Talepleri"
+   gibi uzun bir etiketle rozet, yan menüyü yatay taşırmak yerine kendi satırına
+   iner. `min-width` + `padding` tek haneli sayıda da daire görünümü verir. */
+.yan-menu a { flex-wrap: wrap; }
+.menu-rozet {
+  margin-left: auto;
+  flex: 0 0 auto;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--ana);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.6;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.yan-menu a.etkin .menu-rozet { background: var(--ana-koyu); }

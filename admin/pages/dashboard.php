@@ -205,6 +205,49 @@ $medyaBoyut = function_exists('media_total_size') ? media_total_size() : 0;
   </div>
 
   <div>
+    <?php
+    /* SAĞLIK KARTI (1.2-02, Ajan-A) ------------------------------------------
+     * NEDEN KÜMÜLATİF SAYAÇLARIN YANINDA: yukarıdaki kutular "ne kadar iş
+     * yaptık" der; hiçbiri "sistem hâlâ ayakta mı" sorusunu yanıtlamaz.
+     * Yayıncının en pahalı arızaları sessizdir — cron durur ve zamanlanmış
+     * haberler yayımlanmaz, disk dolar ve görsel yüklemesi başarısız olur,
+     * yedek üç aydır alınmamıştır. Üçü de ancak iş işten geçtikten sonra
+     * fark edilir. Eşik renkleri bu yüzden var: sayı değil, KARAR gösterir.
+     *
+     * NEDEN `tools.manage` KAPISI: disk boşluğu, veritabanı boyutu ve yedek
+     * yaşı işletim ayrıntısıdır; haber yazan bir editöre altyapı bilgisi
+     * sızdırmanın gereği yok. Cron bayatlığı — editoryal karşılığı olan tek
+     * satır — aşağıdaki "Sistem durumu" tablosunda zaten herkese görünüyor. */
+    if (can($me, 'tools.manage') && function_exists('analytics_health_checks')):
+      $saglik = analytics_health_checks();
+      $enKotu = 'olumlu';
+      foreach ($saglik as $s) {
+          if ($s['ton'] === 'olumsuz') { $enKotu = 'olumsuz'; break; }
+          if ($s['ton'] === 'uyari') { $enKotu = 'uyari'; }
+      }
+      ?>
+      <div class="kart">
+        <div class="kart-baslik">
+          <span>Sistem sağlığı</span>
+          <?= admin_badge($enKotu === 'olumsuz' ? 'ilgi gerekiyor' : ($enKotu === 'uyari' ? 'göz atın' : 'iyi'), $enKotu) ?>
+        </div>
+        <table class="tablo" style="min-width:0">
+          <?php foreach ($saglik as $s): ?>
+            <tr>
+              <th><?= esc($s['ad']) ?><span class="satir-alt mini soluk"><?= esc($s['not']) ?></span></th>
+              <td><?= admin_badge($s['deger'], $s['ton']) ?></td>
+            </tr>
+          <?php endforeach; ?>
+        </table>
+        <div class="dugme-grup bosluk-ust">
+          <a class="dugme kucuk" href="<?= esc(admin_url('tools')) ?>">Yedek al / araçlar</a>
+          <?php if (can($me, 'settings.manage') && admin_page_exists('kontrol')): ?>
+            <a class="dugme kucuk" href="<?= esc(admin_url('kontrol')) ?>">Kurulum kontrolü</a>
+          <?php endif; ?>
+        </div>
+      </div>
+    <?php endif; ?>
+
     <div class="kart">
       <div class="kart-baslik">Sistem durumu</div>
       <table class="tablo" style="min-width:0">

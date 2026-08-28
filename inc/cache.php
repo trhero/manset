@@ -99,6 +99,12 @@ function cache_has_session_cookie() {
     if (!empty($_COOKIE['manset_sid'])) { return true; }
     $n = (string)@session_name();
     if ($n !== '' && !empty($_COOKIE[$n])) { return true; }
+    // ÖDEME DUVARI ÇEREZİ (1.2-05): bu çerezi taşıyan ziyaretçinin yanıtı kişiye
+    // özeldir — kalan hakkına göre tam metin ya da kilit görür. Önbellek anahtarı
+    // bu çerezi bilmediği için ona hazır sayfa servis EDİLEMEZ; edilseydi bir
+    // okurun kilitli sayfası hakkı olan okura, ya da tersi, sunulurdu.
+    // Kapı dar: çerezsiz ziyaretçi ve botlar önbellekten almaya devam eder.
+    if (function_exists('paywall_has_cookie') && paywall_has_cookie()) { return true; }
     return false;
 }
 

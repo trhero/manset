@@ -37,8 +37,12 @@ if ($name === 'manset') { $name = 'manset-' . $version; }
 /** Pakete girmeyecek yollar (kökten göreli, önek eşleşmesi). */
 function dist_excluded_prefixes() {
     return [
-        '.git/', '.github/', 'dist/', 'tests/', 'tools/', 'proposals/', 'audit2/', 'audit3/', 'gelistirme/',
+        '.git/', '.github/', 'dist/', 'tests/', 'tools/', 'proposals/', 'gelistirme/',
         'node_modules/', '.vscode/', '.idea/',
+        // NOT: `audit*/` dizinleri aşağıdaki DESENLE dışlanır, tek tek değil.
+        // Elle sayılan liste her denetim turunda unutuluyordu: 1.1'de `audit3/`,
+        // 1.2'de `audit4/` pakete sızdı (ikisi de paket denetiminde yakalandı).
+        // Denetim raporları saldırgana yol haritası verir; pakete girmemeli.
     ];
 }
 
@@ -56,6 +60,7 @@ function dist_excluded_patterns() {
     return [
         '#^db/.*\.sqlite(-wal|-shm)?$#',
         '#^uploads/(?!\.htaccess$|index\.html$|cache/index\.html$).+#',
+        '#^audit[0-9]*/#',
         '#(^|/)\.DS_Store$#',
         '#(^|/)Thumbs\.db$#',
         '#\.log$#',

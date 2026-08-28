@@ -24,7 +24,8 @@ require_once dirname(__DIR__) . '/inc/schema.php';
 require_once dirname(__DIR__) . '/inc/sanitize.php';
 require_once dirname(__DIR__) . '/inc/view.php';
 require_once dirname(__DIR__) . '/inc/ai.php';
-foreach (['media', 'rss', 'ai_jobs', 'seo', 'cache', 'backup', 'widgets', 'kunye', 'members'] as $mod) {
+foreach (array_merge(['media', 'rss', 'ai_jobs', 'seo', 'cache', 'backup', 'widgets', 'kunye', 'members'],
+                     manset_feature_modules()) as $mod) {
     $f = dirname(__DIR__) . '/inc/' . $mod . '.php';
     if (is_file($f)) { require_once $f; }
 }
@@ -48,6 +49,8 @@ function admin_nav() {
 
         'headlines'   => ['label' => 'Manşet Yönetimi',    'perm' => 'headlines.manage',   'group' => 'Vitrin',    'icon' => '★'],
         'ads'         => ['label' => 'Reklamlar',          'perm' => 'ads.schedule',         'group' => 'Vitrin',    'icon' => '▤'],
+        'analytics'   => ['label' => 'Okunma Raporu',       'perm' => 'analytics.view',     'group' => 'Vitrin',    'icon' => '◪'],
+        'seo'         => ['label' => 'SEO',                 'perm' => 'seo.manage',         'group' => 'Vitrin',    'icon' => '⌕'],
 
         'rss'         => ['label' => 'RSS Kaynakları',     'perm' => 'rss.manage',         'group' => 'Otomasyon', 'icon' => '⟳'],
         'ai'          => ['label' => 'Yapay Zekâ',         'perm' => 'ai.use',             'group' => 'Otomasyon', 'icon' => '◆'],
@@ -63,6 +66,9 @@ function admin_nav() {
         'users'       => ['label' => 'Kullanıcılar',       'perm' => 'users.manage',       'group' => 'Ayarlar',   'icon' => '☺'],
         'roles'       => ['label' => 'Roller ve İzinler',  'perm' => 'roles.manage',       'group' => 'Ayarlar',   'icon' => '⚿'],
         'members'     => ['label' => 'Üyeler',             'perm' => 'members.manage',     'group' => 'Ayarlar',   'icon' => '♣'],
+        'payments'    => ['label' => 'Ödemeler',           'perm' => 'payments.manage',    'group' => 'Ayarlar',   'icon' => '₺'],
+        'newsletter'  => ['label' => 'Bülten',             'perm' => 'newsletter.manage',  'group' => 'Ayarlar',   'icon' => '✉'],
+        'kontrol'     => ['label' => 'Kurulum Kontrolü',   'perm' => 'settings.manage',    'group' => 'Araçlar',   'icon' => '✓'],
 
         'tools'       => ['label' => 'Araçlar',            'perm' => 'tools.manage',       'group' => 'Araçlar',   'icon' => '⚒'],
         'logs'        => ['label' => 'Günlükler',          'perm' => 'tools.manage',       'group' => 'Araçlar',   'icon' => '☰'],
@@ -311,6 +317,10 @@ function admin_layout($title, $content, $activePage, $user, array $nav) {
         if (!admin_page_exists($slug)) { continue; }
         $groups[$item['group']][$slug] = $item;
     }
+    // MENÜ ROZETLERİ (1.2-02): slug => bekleyen iş sayısı. Sayıları üreten
+    // admin_nav_badges() ayrı bir modülün dosyasındadır; yoksa rozet çizilmez.
+    // Menü HER SAYFADA çizildiği için bu işlevin ucuz olması zorunludur.
+    $badges = function_exists('admin_nav_badges') ? (array)admin_nav_badges($user, $groups) : [];
     $aiStatus = ai_status_text();
     ?><!doctype html>
 <html lang="tr">
@@ -353,8 +363,11 @@ function admin_layout($title, $content, $activePage, $user, array $nav) {
         <h2><?= esc($groupName) ?></h2>
         <ul>
           <?php foreach ($items as $slug => $item): ?>
+            <?php $rozet = isset($badges[$slug]) ? (int)$badges[$slug] : 0; ?>
             <li><a href="<?= esc(admin_url($slug)) ?>" class="<?= $slug === $activePage ? 'etkin' : '' ?>">
-              <span class="ikon" aria-hidden="true"><?= $item['icon'] ?></span><?= esc($item['label']) ?></a></li>
+              <span class="ikon" aria-hidden="true"><?= $item['icon'] ?></span><?= esc($item['label']) ?>
+              <?php if ($rozet > 0): ?><span class="menu-rozet" title="bekleyen"><?= esc($rozet > 99 ? '99+' : $rozet) ?></span><?php endif; ?>
+            </a></li>
           <?php endforeach; ?>
         </ul>
       </div>

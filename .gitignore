@@ -12,7 +12,11 @@
 !/uploads/cache/index.html
 /dist/
 .dev/
-/tests/.run/
+# e2e çalışma kopyaları — 1.2'de PORTA GÖRE ayrıldı (.run-8921 gibi).
+# Desen yıldızsız kalırsa bu dizinler depoya girer; her biri app_key,
+# cron_key ve parolası tests/e2e.sh'de yazan bir yönetici hesabı taşır.
+/tests/.run*
+/tests/.t-*
 /tests/.cookies
 /tests/.body
 /tests/.server.log
@@ -21,3 +25,7 @@
 /tests/.page.html
 /tests/.inline.js
 /tests/.son-kosu.txt
+
+# Yükseltme kilidi (flock). Süreç ölünce işletim sistemi kilidi bırakır;
+# dosyanın kendisi kalıcı değildir ve depoya girmemelidir.
+/db/.upgrading

@@ -47,8 +47,14 @@ foreach ($yigin as $dosya) {
     $rel = ltrim(substr($yol, strlen($root)), '/');
 
     if (substr($rel, -4) !== '.php') { continue; }
-    if (strpos($rel, '.git/') === 0 || strpos($rel, 'tests/.run/') === 0
-        || strpos($rel, 'dist/') === 0 || strpos($rel, 'audit2/') === 0) { continue; }
+    // `tests/.run*` — e2e çalışma kopyaları. 1.2'de bu dizin PORTA GÖRE ayrıldı
+    // (`.run-8921` gibi), çünkü paylaşılan tek dizin eşzamanlı koşuların
+    // birbirini silmesine yol açıyordu. Buradaki desen de ona uymalı: yoksa
+    // denetim projenin kendi kopyalarını yeniden tarar (191 → 695 dosya) ve
+    // bir kopyadaki eski sürüm, kökte düzeltilmiş bir ihlali diri gösterir.
+    if (strpos($rel, '.git/') === 0 || strpos($rel, 'tests/.run') === 0
+        || strpos($rel, 'dist/') === 0 || strpos($rel, 'audit2/') === 0
+        || strpos($rel, 'audit3/') === 0) { continue; }
     if (in_array($rel, $muaf, true)) { continue; }
 
     $tarandi++;

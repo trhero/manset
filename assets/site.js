@@ -157,7 +157,11 @@
       fetch(API + '?a=public.view', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ id: id }),
+        // document.referrer, okurun siteye NEREDEN geldigini tasiyan tek kaynak:
+        // sunucu bu istegin Referer basliginda haberin KENDI adresini gorur
+        // (ayni koken), yani bilgi baska hicbir yerden gelemez. Sunucu ham
+        // adresi SAKLAMAZ, yalniz turunu (arama/sosyal/dogrudan/ic/diger).
+        body: JSON.stringify({ id: id, ref: document.referrer || '' }),
         credentials: 'same-origin',
         keepalive: true
       }).catch(function () { /* sayaç kritik değil, sessiz geç */ });

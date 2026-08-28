@@ -1,7 +1,8 @@
 <?php
 /**
  * Manşet — Künye/BİK, düzeltme-cevap, widget ve bülten uçları. (Ajan-9)
- * Ad alanı: kunye.* corrections.* widgets.* newsletter.*  (CONTRACTS.md §7)
+ * Ad alanı: kunye.* corrections.* widgets.*  (CONTRACTS.md §7)
+ * NOT: newsletter.* 1.2'de inc/api/newsletter_api.php'ye taşındı.
  *
  * Kayıtlı uçlar:
  *   kunye.save            (settings.manage) künye alanlarını kaydeder
@@ -15,9 +16,7 @@
  *   widgets.save          (settings.manage) widget ayarları
  *   widgets.test          (settings.manage) harici JSON adresini çeker ve gösterir
  *   widgets.clear_cache   (settings.manage) widget önbelleğini temizler
- *   newsletter.export     (settings.manage, GET) abone listesi CSV
  *   public.correction     (public) ön yüz düzeltme talebi formu
- *   newsletter.subscribe  (public) bülten abone kaydı (gönderim YOK)
  */
 if (!defined('MANSET_BOOTSTRAPPED')) { exit; }
 
@@ -318,29 +317,17 @@ api_register('widgets.clear_cache', function () {
     return ['message' => 'Widget önbelleği temizlendi.'];
 }, ['perm' => 'settings.manage', 'methods' => ['POST']]);
 
-// ================================================================ newsletter.export
-/**
- * Abone listesi CSV indirmesi. Kendi çıktısını verir (json_out kullanılmaz).
- * Yöntem GET olduğu için dağıtıcı CSRF aramaz; izin denetimi yapılır.
- */
-api_register('newsletter.export', function () {
-    $rows = qa('SELECT email, ip, confirmed, created_at FROM newsletter_subscribers ORDER BY id DESC');
-    header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename="bulten-aboneleri-' . date('Y-m-d') . '.csv"');
-    header('X-Content-Type-Options: nosniff');
-    echo "\xEF\xBB\xBF";                       // Excel'in UTF-8 tanıması için BOM
-    $fh = fopen('php://output', 'w');
-    fputcsv($fh, ['E-posta', 'IP', 'Onaylı', 'Kayıt tarihi'], ';');
-    foreach ($rows as $r) {
-        fputcsv($fh, [
-            (string)$r['email'],
-            (string)$r['ip'],
-            (int)$r['confirmed'] === 1 ? 'evet' : 'hayır',
-            (string)$r['created_at'],
-        ], ';');
-    }
-    fclose($fh);
-}, ['perm' => 'settings.manage', 'methods' => ['GET']]);
+// ================================================================ newsletter.* KALDIRILDI
+// `newsletter.export` ve `newsletter.subscribe` uclari 1.2'de inc/api/newsletter_api.php'ye
+// tasindi (cift onay, token'li cikis, KVKK denetim kaydi). Buradaki eski surumler
+// SILINDI, cunku api.php inc/api/*.php dosyalarini ALFABETIK yukluyor ve ayni
+// anahtari sonra kaydeden kazaniyordu: yeni uclarin gecerli olmasi yalnizca
+// "kunye_api" < "newsletter_api" siralamasina bagliydi.
+//
+// Bu, gorunmez ve tehlikeli bir bagimlilik: dosya adi degisse eski `newsletter.export`
+// yeniden devreye girer ve o surum `settings.manage` istiyor (yenisi `newsletter.manage`),
+// abonelerin IP adresini de disa aktariyor ve denetim kaydi YAZMIYOR. Yani bir yeniden
+// adlandirma, KVKK kapisini sessizce geri alirdi.
 
 // ================================================================ public.correction
 /**
@@ -363,40 +350,3 @@ api_register('public.correction', function () {
     return ['message' => $res['message']];
 }, ['perm' => 'public', 'methods' => ['POST']]);
 
-// ================================================================ newsletter.subscribe
-/**
- * İstek : {email:string, website:string (honeypot), _csrf:string}
- * Yanıt : {ok:true, message:'Kaydınız alındı.'}
- *
- * Zaten kayıtlı e-posta için de aynı başarı mesajı döner (varlık sızdırılmaz).
- * Bülten GÖNDERİM motoru kapsam dışıdır (CONTRACTS §13) — yalnız abone toplanır.
- */
-api_register('newsletter.subscribe', function () {
-    $ok = ['message' => 'Kaydınız alındı.'];
-
-    if (!rate_limit('newsletter:' . client_ip(), 3, 900)) {
-        json_err('Çok sık deneme yapıldı. Lütfen bir süre sonra tekrar deneyin.', 429);
-    }
-    if (trim((string)kunye_api_field('website', '')) !== '') { return $ok; }   // honeypot
-
-    $email = mb_strtolower(trim((string)kunye_api_field('email', '')), 'UTF-8');
-    if (mb_strlen($email) > 120 || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        json_err('Geçerli bir e-posta adresi girin.', 400);
-    }
-
-    $exists = (int)qv('SELECT id FROM newsletter_subscribers WHERE email = :e', [':e' => $email], 0);
-    if (!$exists) {
-        try {
-            db_insert('newsletter_subscribers', [
-                'email'      => $email,
-                'ip'         => client_ip(),
-                'confirmed'  => 0,
-                'created_at' => now(),
-            ]);
-        } catch (Throwable $e) {
-            // UNIQUE çakışması (eşzamanlı istek) — kullanıcıya yine başarı döner
-            log_error('Bülten kaydı: ' . $e->getMessage());
-        }
-    }
-    return $ok;
-}, ['perm' => 'public', 'methods' => ['POST']]);
