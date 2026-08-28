@@ -1,0 +1,37 @@
+{
+  "name": "Bülten",
+  "description": "Minimal dergi düzeni: tek sütun akış, bol boşluk, büyük tipografi ve ince ayraçlar. Kenar çubuğu varsayılan olarak kapalıdır.",
+  "version": "1.0.0",
+  "author": "Manşet",
+  "preview": "#111827",
+  "supports_dark": true,
+  "layout_slots": ["header", "sidebar_1", "sidebar_2", "in_article", "footer"],
+  "settings": [
+    { "key": "color_primary", "label": "Ana renk", "type": "color", "default": "#111827", "css_var": "renk-ana", "group": "Renkler" },
+    { "key": "color_accent", "label": "Vurgu rengi", "type": "color", "default": "#b45309", "css_var": "renk-vurgu", "group": "Renkler" },
+    { "key": "color_bg", "label": "Zemin", "type": "color", "default": "#fbfbfa", "css_var": "renk-zemin", "group": "Renkler" },
+    { "key": "color_surface", "label": "Yüzey", "type": "color", "default": "#ffffff", "css_var": "renk-yuzey", "group": "Renkler" },
+    { "key": "color_text", "label": "Metin", "type": "color", "default": "#14181f", "css_var": "renk-metin", "group": "Renkler" },
+    { "key": "color_muted", "label": "İkincil metin", "type": "color", "default": "#616b7a", "css_var": "renk-soluk", "group": "Renkler" },
+    { "key": "color_line", "label": "Ayraç çizgisi", "type": "color", "default": "#e4e6e9", "css_var": "renk-cizgi", "group": "Renkler" },
+
+    { "key": "font_heading", "label": "Başlık yazı tipi", "type": "font", "default": "Georgia, 'Iowan Old Style', 'Times New Roman', serif", "css_var": "yazi-baslik", "group": "Tipografi" },
+    { "key": "font_body", "label": "Gövde yazı tipi", "type": "font", "default": "system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif", "css_var": "yazi-govde", "group": "Tipografi" },
+    { "key": "font_size", "label": "Gövde punto", "type": "size", "unit": "px", "default": "18", "min": "14", "max": "24", "css_var": "yazi-boy", "group": "Tipografi", "help": "Akış metninin temel punto değeri. Dergi hissi için 18–20 px önerilir." },
+    { "key": "google_fonts_url", "label": "Google Fonts URL", "type": "text", "default": "", "group": "Tipografi", "help": "Yalnız https://fonts.googleapis.com/ ile başlayan adres kabul edilir." },
+
+    { "key": "akis_genisligi", "label": "Akış genişliği", "type": "size", "unit": "px", "default": "720", "min": "560", "max": "980", "css_var": "akis", "group": "Bülten", "help": "Okuma sütununun genişliği. Dergi ölçüsü için 680–760 px idealdir." },
+    { "key": "buyuk_gorsel", "label": "Büyük kapak görselleri", "type": "bool", "default": "1", "group": "Bülten", "help": "Akıştaki ilk haber ve manşetler tam genişlikte kapak görseliyle basılır." },
+    { "key": "sayi_goster", "label": "Sayı ve tarih bandı", "type": "bool", "default": "1", "group": "Bülten", "help": "Üst bantta gün sayısı ve uzun tarih gösterilir." },
+
+    { "key": "container_width", "label": "Konteyner genişliği", "type": "size", "unit": "px", "default": "1080", "css_var": "genislik", "group": "Yerleşim" },
+    { "key": "radius", "label": "Köşe yumuşaklığı", "type": "size", "unit": "px", "default": "0", "css_var": "kose", "group": "Yerleşim" },
+    { "key": "bosluk", "label": "Bloklar arası boşluk", "type": "size", "unit": "px", "default": "56", "css_var": "aralik", "group": "Yerleşim" },
+    { "key": "sidebar_position", "label": "Kenar çubuğu", "type": "select", "default": "none",
+      "options": [{"value":"none","label":"Yok (önerilen)"},{"value":"right","label":"Sağda"},{"value":"left","label":"Solda"}],
+      "group": "Yerleşim" },
+
+    { "key": "dark_mode", "label": "Karanlık mod", "type": "bool", "default": "0", "group": "Gelişmiş", "help": "Site koyu zeminle yayımlanır." },
+    { "key": "custom_css", "label": "Özel CSS", "type": "css", "default": "", "group": "Gelişmiş", "admin_only": true }
+  ]
+}

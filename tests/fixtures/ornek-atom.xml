@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Manşet test beslemesi — Atom 1.0, 3 öge.
+  Kapsanan durumlar: link[rel=alternate], summary, content type="html",
+  published/updated, link[rel=enclosure] görseli, Türkçe karakterler.
+-->
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="tr">
+  <title>Örnek Bülten</title>
+  <subtitle>Manşet e2e testleri için üretilmiş örnek Atom beslemesi.</subtitle>
+  <link rel="self" href="https://ornek-bulten.test/atom.xml"/>
+  <link rel="alternate" href="https://ornek-bulten.test/"/>
+  <id>urn:uuid:6f1c9a20-0000-4000-8000-0000000000a1</id>
+  <updated>2026-08-22T09:00:00+03:00</updated>
+
+  <entry>
+    <title>Kültür sanat takvimi: eylül ayında öne çıkanlar</title>
+    <link rel="alternate" type="text/html" href="https://ornek-bulten.test/yazi/kultur-sanat-takvimi"/>
+    <link rel="enclosure" type="image/jpeg" href="https://ornek-bulten.test/gorsel/sahne.jpg"/>
+    <id>urn:uuid:6f1c9a20-0000-4000-8000-0000000000b1</id>
+    <published>2026-08-22T08:30:00+03:00</published>
+    <updated>2026-08-22T08:45:00+03:00</updated>
+    <summary>Eylül ayında açılacak sergiler, sahnelenecek oyunlar ve şehirdeki konserler tek listede.</summary>
+    <content type="html">&lt;p&gt;Şehrin kültür merkezleri eylül programını açıkladı. Sergiler &lt;strong&gt;ücretsiz&lt;/strong&gt; gezilebilecek.&lt;/p&gt;</content>
+  </entry>
+
+  <entry>
+    <title>Iğdır'da bağ hasadı erken başladı</title>
+    <link rel="alternate" href="https://ornek-bulten.test/yazi/igdirda-bag-hasadi"/>
+    <id>urn:uuid:6f1c9a20-0000-4000-8000-0000000000b2</id>
+    <published>2026-08-21T16:10:00+03:00</published>
+    <updated>2026-08-21T16:10:00+03:00</updated>
+    <summary>Sıcak geçen yaz nedeniyle hasat iki hafta öne çekildi; üreticiler verimden memnun.</summary>
+  </entry>
+
+  <entry>
+    <title>Öğrenci kulüplerinden çevre buluşması</title>
+    <link rel="alternate" href="https://ornek-bulten.test/yazi/ogrenci-kulupleri-cevre-bulusmasi"/>
+    <id>urn:uuid:6f1c9a20-0000-4000-8000-0000000000b3</id>
+    <updated>2026-08-20T11:25:00+03:00</updated>
+    <summary>Üç üniversiteden öğrenci kulübü, kıyı temizliği ve fidan dikimi için bir araya geldi.</summary>
+    <content type="html">&lt;p&gt;Etkinlikte 300'den fazla gönüllü görev aldı. Toplanan atıkların geri dönüşüme gönderildiği bildirildi.&lt;/p&gt;</content>
+  </entry>
+</feed>

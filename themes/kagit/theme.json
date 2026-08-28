@@ -1,0 +1,50 @@
+{
+  "name": "Kâğıt",
+  "description": "Gazete nostaljisi: krem zemin, serif başlıklar, ince siyah çizgiler, sütun ayraçları, büyük kapak manşeti ve gövdede büyük ilk harf.",
+  "version": "1.0.0",
+  "author": "Manşet",
+  "preview": "#8b5a2b",
+  "supports_dark": false,
+  "layout_slots": ["header", "sidebar_1", "sidebar_2", "in_article", "footer"],
+  "settings": [
+    { "key": "color_primary",   "label": "Ana renk (damga)", "type": "color", "default": "#8b5a2b", "css_var": "renk-ana", "group": "Renkler" },
+    { "key": "color_accent",    "label": "Vurgu rengi",      "type": "color", "default": "#7a2118", "css_var": "renk-vurgu", "group": "Renkler" },
+    { "key": "color_bg",        "label": "Kâğıt zemini",     "type": "color", "default": "#f7f3e9", "css_var": "renk-zemin", "group": "Renkler" },
+    { "key": "color_surface",   "label": "Sütun zemini",     "type": "color", "default": "#fffdf7", "css_var": "renk-yuzey", "group": "Renkler" },
+    { "key": "color_text",      "label": "Mürekkep",         "type": "color", "default": "#16130f", "css_var": "renk-metin", "group": "Renkler" },
+    { "key": "color_muted",     "label": "Soluk mürekkep",   "type": "color", "default": "#6b6153", "css_var": "renk-soluk", "group": "Renkler" },
+    { "key": "color_line",      "label": "Çizgi rengi",      "type": "color", "default": "#211c15", "css_var": "renk-cizgi", "group": "Renkler" },
+
+    { "key": "serif_baslik",    "label": "Başlık serif yığını", "type": "font",
+      "default": "Georgia, 'Times New Roman', 'Noto Serif', ui-serif, serif", "css_var": "yazi-baslik", "group": "Tipografi" },
+    { "key": "font_body",       "label": "Gövde yazı tipi",  "type": "font",
+      "default": "Georgia, 'Times New Roman', 'Noto Serif', ui-serif, serif", "css_var": "yazi-govde", "group": "Tipografi" },
+    { "key": "font_kunye",      "label": "Künye/etiket yazı tipi", "type": "font",
+      "default": "'Segoe UI', system-ui, Arial, sans-serif", "css_var": "yazi-etiket", "group": "Tipografi" },
+    { "key": "font_size",       "label": "Gövde punto",      "type": "size", "unit": "px", "default": "17", "css_var": "yazi-boy", "group": "Tipografi" },
+    { "key": "google_fonts_url","label": "Google Fonts URL", "type": "text", "default": "", "group": "Tipografi" },
+
+    { "key": "container_width", "label": "Konteyner genişliği", "type": "size", "unit": "px", "default": "1140", "css_var": "genislik", "group": "Yerleşim" },
+    { "key": "radius",          "label": "Köşe yumuşaklığı", "type": "size", "unit": "px", "default": "0", "css_var": "kose", "group": "Yerleşim" },
+    { "key": "sutun_sayisi",    "label": "Sayfa sütun sayısı", "type": "select", "default": "3",
+      "options": [{"value":"2","label":"2 sütun"},{"value":"3","label":"3 sütun"}], "group": "Yerleşim" },
+    { "key": "sidebar_position","label": "Kenar çubuğu",     "type": "select", "default": "right",
+      "options": [{"value":"right","label":"Sağda"},{"value":"left","label":"Solda"},{"value":"none","label":"Yok"}], "group": "Yerleşim" },
+    { "key": "card_style",      "label": "Kart stili",       "type": "select", "default": "flat",
+      "options": [{"value":"flat","label":"Düz (gazete)"},{"value":"border","label":"Çerçeveli"},{"value":"shadow","label":"Gölgeli"}], "group": "Yerleşim" },
+
+    { "key": "kagit_doku",      "label": "Kâğıt dokusu (CSS ile, dış görsel yok)", "type": "bool", "default": "1", "group": "Kâğıt" },
+    { "key": "drop_cap",        "label": "Gövdede büyük ilk harf", "type": "bool", "default": "1", "group": "Kâğıt" },
+    { "key": "damga_etiket",    "label": "Kategori etiketleri damga görünümlü", "type": "bool", "default": "1", "group": "Kâğıt" },
+    { "key": "ust_slogan",      "label": "Başlık altı slogan çizgisi", "type": "text",
+      "default": "Bağımsız haber — her gün", "group": "Kâğıt" },
+
+    { "key": "show_reading_time","label": "Okuma süresi göster", "type": "bool", "default": "1", "group": "Bileşenler" },
+    { "key": "show_share",      "label": "Paylaş düğmeleri",     "type": "bool", "default": "1", "group": "Bileşenler" },
+    { "key": "show_suggest",    "label": "Aramada canlı öneri",  "type": "bool", "default": "1", "group": "Bileşenler" },
+    { "key": "newsletter_text", "label": "Bülten kutusu metni",  "type": "text",
+      "default": "Günün gazetesini e-postanıza alın.", "group": "Bileşenler" },
+
+    { "key": "custom_css",      "label": "Özel CSS", "type": "css", "default": "", "group": "Gelişmiş", "admin_only": true }
+  ]
+}

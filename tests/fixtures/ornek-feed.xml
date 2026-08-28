@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Manşet test beslemesi — RSS 2.0, 5 öge.
+  Kapsanan durumlar: Türkçe karakterler (ş ğ ı İ ç ö ü), CDATA başlık,
+  enclosure görseli, media:thumbnail, content:encoded gövde, guid varyantları.
+-->
+<rss version="2.0"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Örnek Ajans — Güncel Haberler</title>
+    <link>https://ornek-ajans.test/</link>
+    <description>Manşet e2e testleri için üretilmiş örnek RSS 2.0 beslemesi.</description>
+    <language>tr-TR</language>
+    <lastBuildDate>Sat, 22 Aug 2026 09:30:00 +0300</lastBuildDate>
+
+    <item>
+      <title>Şehirde yağış beklentisi: İstanbul için sarı kod</title>
+      <link>https://ornek-ajans.test/haber/sehirde-yagis-beklentisi</link>
+      <guid isPermaLink="false">ornek-ajans-0001</guid>
+      <pubDate>Sat, 22 Aug 2026 09:15:00 +0300</pubDate>
+      <description>Meteoroloji, İstanbul ve çevresi için kuvvetli sağanak uyarısı yaptı. Vatandaşların dikkatli olması istendi.</description>
+      <enclosure url="https://ornek-ajans.test/gorsel/yagis-uyarisi.jpg" type="image/jpeg" length="184320"/>
+      <dc:creator>Örnek Ajans</dc:creator>
+    </item>
+
+    <item>
+      <title><![CDATA[Çiftçiye destek ödemesi: başvurular bugün başlıyor]]></title>
+      <link>https://ornek-ajans.test/haber/ciftciye-destek-odemesi</link>
+      <guid isPermaLink="true">https://ornek-ajans.test/haber/ciftciye-destek-odemesi</guid>
+      <pubDate>Sat, 22 Aug 2026 08:40:00 +0300</pubDate>
+      <description>Tarım ve Orman Bakanlığı, 2026 yılı destekleme ödemeleri için başvuru takvimini açıkladı.</description>
+      <content:encoded><![CDATA[
+        <p><strong>Ankara</strong> — Tarım ve Orman Bakanlığı, 2026 yılı bitkisel üretim destekleme
+        ödemelerine ilişkin başvuruların bugün başladığını duyurdu.</p>
+        <p>Başvurular il ve ilçe müdürlükleri ile çevrim içi sistem üzerinden alınacak.
+        Bakanlık, çiftçilerin <em>son başvuru tarihini</em> kaçırmaması gerektiğini vurguladı.</p>
+        <figure><img src="https://ornek-ajans.test/gorsel/tarla-destek.jpg" alt="Buğday tarlası"><figcaption>Arşiv</figcaption></figure>
+        <script>alert('temizlenmeli')</script>
+      ]]></content:encoded>
+    </item>
+
+    <item>
+      <title>Işık kirliliği ölçümleri güncellendi</title>
+      <link>https://ornek-ajans.test/haber/isik-kirliligi-olcumleri</link>
+      <guid isPermaLink="false">ornek-ajans-0003</guid>
+      <pubDate>Sat, 22 Aug 2026 07:55:00 +0300</pubDate>
+      <description>Gözlemevi verilerine göre kent merkezindeki ışık kirliliği son beş yılda yüzde 18 arttı.</description>
+      <media:thumbnail url="https://ornek-ajans.test/gorsel/gokyuzu.png" width="640" height="360"/>
+    </item>
+
+    <item>
+      <title>Üniversite tercih rehberi yayımlandı</title>
+      <link>https://ornek-ajans.test/haber/universite-tercih-rehberi</link>
+      <guid isPermaLink="false">ornek-ajans-0004</guid>
+      <pubDate>Fri, 21 Aug 2026 18:20:00 +0300</pubDate>
+      <description>Ölçme, Seçme ve Yerleştirme Merkezi tercih kılavuzunu adaylarla paylaştı. Kılavuzda kontenjanlar ve taban puanlar yer alıyor.</description>
+    </item>
+
+    <item>
+      <title>Ağrı Dağı eteklerinde yeni yürüyüş parkuru açıldı</title>
+      <link>https://ornek-ajans.test/haber/agri-dagi-yuruyus-parkuru</link>
+      <guid isPermaLink="false">ornek-ajans-0005</guid>
+      <pubDate>Fri, 21 Aug 2026 12:05:00 +0300</pubDate>
+      <description>Doğa sporları meraklıları için hazırlanan 12 kilometrelik parkur ziyaretçilere açıldı.</description>
+      <media:content url="https://ornek-ajans.test/gorsel/parkur.webp" type="image/webp" medium="image"/>
+    </item>
+  </channel>
+</rss>

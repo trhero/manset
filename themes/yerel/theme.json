@@ -1,0 +1,51 @@
+{
+  "name": "Yerel",
+  "description": "Yerel gazete düzeni: bölge bandı, duyuru kutusu, vefat ve ilan alanı, nöbetçi eczane ve etkinlik kutuları. Sıcak renkler, kalabalık ama düzenli.",
+  "version": "1.0.0",
+  "author": "Manşet",
+  "preview": "#0f766e",
+  "supports_dark": false,
+  "layout_slots": ["header", "sidebar_1", "sidebar_2", "in_article", "footer"],
+  "settings": [
+    { "key": "bolge_adi", "label": "Bölge / il adı", "type": "text", "default": "SİVAS", "group": "Yerel", "help": "Üst bantta büyük harflerle görünür. Boş bırakılırsa bant gizlenir." },
+    { "key": "duyuru_metni", "label": "Duyuru metni", "type": "text", "default": "", "group": "Yerel", "help": "Menünün altındaki duyuru kutusunda yayımlanır. Boşsa kutu gizlenir." },
+    { "key": "duyuru_bag", "label": "Duyuru bağlantısı", "type": "text", "default": "", "group": "Yerel", "help": "İsteğe bağlı. Duyuru metni bu adrese bağlanır." },
+    { "key": "ilan_basligi", "label": "İlan bloğu başlığı", "type": "text", "default": "Vefat ve İlanlar", "group": "Yerel" },
+    { "key": "ilan_slot", "label": "İlan bloğu reklam slotu", "type": "select", "default": "sidebar_2",
+      "options": [
+        {"value":"sidebar_2","label":"sidebar_2 (varsayılan)"},
+        {"value":"sidebar_1","label":"sidebar_1"},
+        {"value":"in_article","label":"in_article"},
+        {"value":"footer","label":"footer"},
+        {"value":"header","label":"header"}
+      ],
+      "group": "Yerel",
+      "help": "İlan içeriği Reklamlar ekranındaki bu slottan beslenir; ayrı bir tablo tutulmaz." },
+    { "key": "eczane_metni", "label": "Nöbetçi eczane notu", "type": "text", "default": "", "group": "Yerel", "help": "Örn. “Merkez Eczanesi · Atatürk Cad. 14 · 0346 000 00 00”. Boşsa kutu gizlenir." },
+    { "key": "etkinlik_metni", "label": "Etkinlik notu", "type": "text", "default": "", "group": "Yerel", "help": "Bugünün etkinliği / duyurusu. Boşsa kutu gizlenir." },
+
+    { "key": "color_primary", "label": "Ana renk", "type": "color", "default": "#0f766e", "css_var": "renk-ana", "group": "Renkler" },
+    { "key": "color_accent", "label": "Vurgu rengi", "type": "color", "default": "#b45309", "css_var": "renk-vurgu", "group": "Renkler" },
+    { "key": "color_bg", "label": "Zemin", "type": "color", "default": "#fbf6ef", "css_var": "renk-zemin", "group": "Renkler" },
+    { "key": "color_surface", "label": "Kart zemini", "type": "color", "default": "#ffffff", "css_var": "renk-yuzey", "group": "Renkler" },
+    { "key": "color_text", "label": "Metin", "type": "color", "default": "#241d16", "css_var": "renk-metin", "group": "Renkler" },
+    { "key": "color_muted", "label": "İkincil metin", "type": "color", "default": "#6b5d50", "css_var": "renk-soluk", "group": "Renkler" },
+    { "key": "color_line", "label": "Çizgi", "type": "color", "default": "#e6dbcc", "css_var": "renk-cizgi", "group": "Renkler" },
+    { "key": "color_duyuru", "label": "Duyuru kutusu rengi", "type": "color", "default": "#fde68a", "css_var": "renk-duyuru", "group": "Renkler" },
+
+    { "key": "font_heading", "label": "Başlık yazı tipi", "type": "font", "default": "Georgia, 'Iowan Old Style', 'Times New Roman', serif", "css_var": "yazi-baslik", "group": "Tipografi" },
+    { "key": "font_body", "label": "Gövde yazı tipi", "type": "font", "default": "system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif", "css_var": "yazi-govde", "group": "Tipografi" },
+    { "key": "google_fonts_url", "label": "Google Fonts URL", "type": "text", "default": "", "group": "Tipografi", "help": "Yalnız https://fonts.googleapis.com/ ile başlayan adres kabul edilir." },
+
+    { "key": "container_width", "label": "Konteyner genişliği", "type": "size", "unit": "px", "default": "1200", "css_var": "genislik", "group": "Yerleşim" },
+    { "key": "radius", "label": "Köşe yumuşaklığı", "type": "size", "unit": "px", "default": "5", "css_var": "kose", "group": "Yerleşim" },
+    { "key": "sidebar_position", "label": "Kenar çubuğu", "type": "select", "default": "right",
+      "options": [{"value":"right","label":"Sağda"},{"value":"left","label":"Solda"},{"value":"none","label":"Yok"}],
+      "group": "Yerleşim" },
+    { "key": "card_style", "label": "Kart stili", "type": "select", "default": "border",
+      "options": [{"value":"border","label":"Çerçeveli"},{"value":"shadow","label":"Gölgeli"},{"value":"flat","label":"Düz"}],
+      "group": "Yerleşim" },
+
+    { "key": "custom_css", "label": "Özel CSS", "type": "css", "default": "", "group": "Gelişmiş", "admin_only": true }
+  ]
+}

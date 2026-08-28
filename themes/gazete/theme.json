@@ -1,0 +1,42 @@
+{
+  "name": "Gazete",
+  "description": "Klasik yoğun haber sitesi: geniş manşet, üç sütunlu his, kategori şeritleri, sıkı tipografi.",
+  "version": "1.0.0",
+  "author": "Manşet",
+  "preview": "#c0392b",
+  "supports_dark": false,
+  "layout_slots": ["header", "sidebar_1", "sidebar_2", "in_article", "footer"],
+  "settings": [
+    { "key": "color_primary",   "label": "Ana renk",        "type": "color", "default": "#c0392b", "css_var": "renk-ana", "group": "Renkler" },
+    { "key": "color_accent",    "label": "Vurgu rengi",     "type": "color", "default": "#1f4e79", "css_var": "renk-vurgu", "group": "Renkler" },
+    { "key": "color_bg",        "label": "Zemin",           "type": "color", "default": "#f4f5f7", "css_var": "renk-zemin", "group": "Renkler" },
+    { "key": "color_surface",   "label": "Kart zemini",     "type": "color", "default": "#ffffff", "css_var": "renk-yuzey", "group": "Renkler" },
+    { "key": "color_text",      "label": "Metin",           "type": "color", "default": "#1c1f23", "css_var": "renk-metin", "group": "Renkler" },
+    { "key": "color_muted",     "label": "İkincil metin",   "type": "color", "default": "#6b7280", "css_var": "renk-soluk", "group": "Renkler" },
+    { "key": "color_line",      "label": "Çizgi rengi",     "type": "color", "default": "#e3e7ec", "css_var": "renk-cizgi", "group": "Renkler" },
+    { "key": "color_footer",    "label": "Alt bilgi zemini","type": "color", "default": "#1c1f23", "css_var": "renk-alt", "group": "Renkler" },
+
+    { "key": "font_body",       "label": "Gövde yazı tipi", "type": "font",  "default": "system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif", "css_var": "yazi-govde", "group": "Tipografi" },
+    { "key": "font_heading",    "label": "Başlık yazı tipi","type": "font",  "default": "system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif", "css_var": "yazi-baslik", "group": "Tipografi" },
+    { "key": "font_size",       "label": "Gövde punto",     "type": "size",  "unit": "px", "default": "16", "css_var": "yazi-boy", "group": "Tipografi" },
+    { "key": "google_fonts_url","label": "Google Fonts URL","type": "text",  "default": "", "group": "Tipografi" },
+
+    { "key": "container_width", "label": "Konteyner genişliği", "type": "size", "unit": "px", "default": "1200", "css_var": "genislik", "group": "Yerleşim" },
+    { "key": "radius",          "label": "Köşe yumuşaklığı","type": "size", "unit": "px", "default": "6", "css_var": "kose", "group": "Yerleşim" },
+    { "key": "sidebar_position","label": "Kenar çubuğu",    "type": "select", "default": "right",
+      "options": [{"value":"right","label":"Sağda"},{"value":"left","label":"Solda"},{"value":"none","label":"Yok"}], "group": "Yerleşim" },
+    { "key": "card_style",      "label": "Kart stili",      "type": "select", "default": "shadow",
+      "options": [{"value":"shadow","label":"Gölgeli"},{"value":"border","label":"Çerçeveli"},{"value":"flat","label":"Düz"}], "group": "Yerleşim" },
+    { "key": "dense",           "label": "Sıkı yerleşim (daha çok haber)", "type": "bool", "default": "1", "group": "Yerleşim" },
+
+    { "key": "ticker_speed",    "label": "Son dakika şerit hızı", "type": "select", "default": "orta",
+      "options": [{"value":"yavas","label":"Yavaş"},{"value":"orta","label":"Orta"},{"value":"hizli","label":"Hızlı"}], "group": "Bileşenler" },
+    { "key": "show_reading_time","label": "Okuma süresi göster", "type": "bool", "default": "1", "group": "Bileşenler" },
+    { "key": "show_share",      "label": "Paylaş düğmeleri",     "type": "bool", "default": "1", "group": "Bileşenler" },
+    { "key": "show_suggest",    "label": "Aramada canlı öneri",  "type": "bool", "default": "1", "group": "Bileşenler" },
+    { "key": "newsletter_text", "label": "Bülten kutusu metni",  "type": "text",
+      "default": "Günün öne çıkan haberlerini e-postanıza alın.", "group": "Bileşenler" },
+
+    { "key": "custom_css",      "label": "Özel CSS",        "type": "css", "default": "", "group": "Gelişmiş", "admin_only": true }
+  ]
+}

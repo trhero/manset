@@ -1,0 +1,40 @@
+{
+  "name": "Gece",
+  "description": "Koyu zeminli, yüksek kontrastlı teknoloji/gündem düzeni: kırmızı son dakika şeridi, neon vurgu çizgileri ve mono yazı tipi detayları.",
+  "version": "1.0.0",
+  "author": "Manşet",
+  "preview": "#e11d48",
+  "supports_dark": true,
+  "layout_slots": ["header", "sidebar_1", "sidebar_2", "in_article", "footer"],
+  "settings": [
+    { "key": "color_primary", "label": "Son dakika kırmızısı", "type": "color", "default": "#e11d48", "css_var": "renk-ana", "group": "Renkler", "help": "Son dakika şeridinin zemini. Üzerine beyaz metin basılır." },
+    { "key": "color_accent", "label": "Bağlantı rengi", "type": "color", "default": "#38bdf8", "css_var": "renk-vurgu", "group": "Renkler" },
+    { "key": "color_bg", "label": "Zemin", "type": "color", "default": "#0e1116", "css_var": "renk-zemin", "group": "Renkler" },
+    { "key": "color_surface", "label": "Kart zemini", "type": "color", "default": "#161b22", "css_var": "renk-yuzey", "group": "Renkler" },
+    { "key": "color_text", "label": "Metin", "type": "color", "default": "#e6edf3", "css_var": "renk-metin", "group": "Renkler", "help": "Koyu zeminde kontrast en az 4.5:1 olmalıdır." },
+    { "key": "color_muted", "label": "İkincil metin", "type": "color", "default": "#9aa4b2", "css_var": "renk-soluk", "group": "Renkler", "help": "Varsayılan değer #0e1116 zemininde 7.5:1 kontrast verir." },
+    { "key": "color_line", "label": "Çizgi", "type": "color", "default": "#262d36", "css_var": "renk-cizgi", "group": "Renkler" },
+
+    { "key": "vurgu_neon", "label": "Neon vurgu", "type": "color", "default": "#ff4d6d", "css_var": "renk-neon", "group": "Gece", "help": "Vurgu çizgileri, kategori etiketleri ve başlık altı parıltısı. Koyu zeminde 5.8:1 kontrast." },
+    { "key": "serit_sabit", "label": "Son dakika şeridi sayfa üstünde sabit", "type": "bool", "default": "1", "group": "Gece", "help": "Şerit sayfa kaydırılırken üstte kalır." },
+    { "key": "neon_cizgi", "label": "Neon parıltı efekti", "type": "bool", "default": "1", "group": "Gece", "help": "Başlık altı ve kart kenarlarında hafif parıltı kullanılır." },
+    { "key": "ust_gorsel", "label": "Üst bant arka görseli", "type": "image", "default": "", "group": "Gece", "help": "İsteğe bağlı. Medya kütüphanesinden seçilir; logonun arkasında koyu bir katmanla gösterilir." },
+
+    { "key": "font_heading", "label": "Başlık yazı tipi", "type": "font", "default": "system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif", "css_var": "yazi-baslik", "group": "Tipografi" },
+    { "key": "font_body", "label": "Gövde yazı tipi", "type": "font", "default": "system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif", "css_var": "yazi-govde", "group": "Tipografi" },
+    { "key": "font_mono", "label": "Mono yazı tipi (etiket / tarih)", "type": "font", "default": "ui-monospace, Consolas, 'SFMono-Regular', Menlo, monospace", "css_var": "yazi-mono", "group": "Tipografi" },
+    { "key": "google_fonts_url", "label": "Google Fonts URL", "type": "text", "default": "", "group": "Tipografi", "help": "Yalnız https://fonts.googleapis.com/ ile başlayan adres kabul edilir." },
+
+    { "key": "container_width", "label": "Konteyner genişliği", "type": "size", "unit": "px", "default": "1240", "css_var": "genislik", "group": "Yerleşim" },
+    { "key": "radius", "label": "Köşe yumuşaklığı", "type": "size", "unit": "px", "default": "8", "css_var": "kose", "group": "Yerleşim" },
+    { "key": "sidebar_position", "label": "Kenar çubuğu", "type": "select", "default": "right",
+      "options": [{"value":"right","label":"Sağda"},{"value":"left","label":"Solda"},{"value":"none","label":"Yok"}],
+      "group": "Yerleşim" },
+    { "key": "card_style", "label": "Kart stili", "type": "select", "default": "border",
+      "options": [{"value":"border","label":"Çerçeveli"},{"value":"shadow","label":"Gölgeli"},{"value":"flat","label":"Düz"}],
+      "group": "Yerleşim" },
+
+    { "key": "dark_mode", "label": "Karanlık mod", "type": "bool", "default": "1", "group": "Gelişmiş", "help": "Kapatılırsa Gece teması aydınlık paletiyle yayımlanır." },
+    { "key": "custom_css", "label": "Özel CSS", "type": "css", "default": "", "group": "Gelişmiş", "admin_only": true }
+  ]
+}
