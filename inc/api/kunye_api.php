@@ -9,6 +9,9 @@
  *   corrections.publish   (corrections.publish) düzeltme/cevap metnini yayımlar
  *   corrections.reject    (corrections.triage)  talebi reddeder (dâhilî not)
  *   corrections.delete    (corrections.triage)  talebi siler
+ *   corrections.settings  (settings.manage) yasal süre eşiği + bildirim ayarı
+ *   corrections.update_add    (posts.edit_any) habere editoryal güncelleme notu ekler
+ *   corrections.update_delete (posts.edit_any) güncelleme notunu siler
  *   widgets.save          (settings.manage) widget ayarları
  *   widgets.test          (settings.manage) harici JSON adresini çeker ve gösterir
  *   widgets.clear_cache   (settings.manage) widget önbelleğini temizler
@@ -77,7 +80,7 @@ api_register('kunye.save', function () {
         'message' => 'Künye bilgileri kaydedildi.',
         'missing' => kunye_missing_required(),
     ];
-}, ['perm' => 'settings.manage', 'methods' => ['POST']]);
+}, ['perm' => 'kunye.manage', 'methods' => ['POST']]);
 
 // ================================================================ corrections.list
 /**
@@ -86,7 +89,9 @@ api_register('kunye.save', function () {
  */
 api_register('corrections.list', function () {
     $status = (string)kunye_api_field('status', 'pending');
-    if (!in_array($status, ['pending', 'answered', 'rejected', 'all'], true)) { $status = 'pending'; }
+    if (!in_array($status, ['pending', 'answered', 'rejected', 'all', CORRECTION_KIND_UPDATE], true)) {
+        $status = 'pending';
+    }
     $page = max(1, (int)kunye_api_field('page', 1));
     $perPage = 30;
     $filters = ['status' => $status, 'q' => sanitize_line((string)kunye_api_field('q', ''), 80)];
@@ -106,6 +111,9 @@ api_register('corrections.list', function () {
             'status'     => (string)$r['status'],
             'created_at' => (string)$r['created_at'],
             'publish_at' => (string)arr($r, 'publish_at', ''),
+            // Kim işlem yaptı (göç 012 · corrections.handled_by)
+            'handled_by'   => (int)arr($r, 'handled_by', 0),
+            'handled_name' => (string)arr($r, 'handled_name', ''),
             'sure'       => corrections_deadline_state($r),
         ];
     }
@@ -116,6 +124,9 @@ api_register('corrections.list', function () {
         'counts'  => corrections_counts(),
         'page'    => $page,
         'perPage' => $perPage,
+        // Panelin rozet eşiğini ayarla aynı yerden okuması için
+        'deadline_hours' => corrections_deadline_hours(),
+        'overdue'        => corrections_overdue_count(),
     ];
 }, ['perm' => 'corrections.triage', 'methods' => ['POST']]);
 
@@ -156,6 +167,55 @@ api_register('corrections.delete', function () {
     if (function_exists('cache_flush')) { cache_flush(); }
     return ['message' => 'Talep silindi.'];
 }, ['perm' => 'corrections.triage', 'methods' => ['POST']]);
+
+// ================================================================ corrections.settings
+/**
+ * İstek : {deadline_hours:int(1-720), notify:'0'|'1'}
+ * Yanıt : {ok:true, message:'…', deadline_hours:int}
+ *
+ * Yasal süre eşiği KODA GÖMÜLMEZ: mevzuat değişebileceği için yayıncı
+ * güncelleyebilmelidir (docs/BIK-NOTLARI.md §4 özet "bir gün" der; yürürlükteki
+ * metni yayıncı resmî kaynaktan teyit etmelidir).
+ */
+api_register('corrections.settings', function () {
+    $h = (int)kunye_api_field('deadline_hours', corrections_deadline_hours());
+    if ($h < 1 || $h > 720) { json_err('Yanıt süresi 1–720 saat aralığında olmalı.', 400); }
+
+    setting_set_many([
+        'corrections_deadline_hours' => (string)$h,
+        'corrections_notify_enabled' => (string)kunye_api_field('notify', '1') === '1' ? '1' : '0',
+    ]);
+    settings_all(true);
+    if (function_exists('cache_flush')) { cache_flush(); }
+
+    return ['message' => 'Düzeltme ayarları kaydedildi.', 'deadline_hours' => corrections_deadline_hours()];
+}, ['perm' => 'settings.manage', 'methods' => ['POST']]);
+
+// ================================================================ corrections.update_add
+/**
+ * İstek : {post_id:int, text:string}
+ * Yanıt : {ok:true, message:'…', id:int}
+ *
+ * EDİTORYAL güncelleme notu — düzeltme/tekzip DEĞİLDİR. Yasal süreye tabi
+ * olmadığı için `corrections.publish` (sorumlu müdür) kapısı ARANMAZ; haber
+ * düzenleme yetkisi yeterlidir.
+ */
+api_register('corrections.update_add', function () {
+    $res = post_update_note_add((int)kunye_api_field('post_id', 0), (string)kunye_api_field('text', ''));
+    if (!$res['ok']) { json_err($res['error'], (int)$res['code']); }
+    return ['message' => $res['message'], 'id' => (int)$res['id']];
+}, ['perm' => 'posts.edit_any', 'methods' => ['POST']]);
+
+// ================================================================ corrections.update_delete
+/**
+ * İstek : {id:int}
+ * Yanıt : {ok:true, message:'Güncelleme notu silindi.'}
+ */
+api_register('corrections.update_delete', function () {
+    $res = post_update_note_delete((int)kunye_api_field('id', 0));
+    if (!$res['ok']) { json_err($res['error'], (int)$res['code']); }
+    return ['message' => $res['message']];
+}, ['perm' => 'posts.edit_any', 'methods' => ['POST']]);
 
 // ================================================================ widgets.save
 /**

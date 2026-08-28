@@ -92,6 +92,11 @@ function vitrin_datetime($value) {
 /** Haber satırı yayında mı? (status + published_at) */
 function vitrin_is_published($row) {
     if (!is_array($row) || (string)arr($row, 'status', '') !== 'published') { return false; }
+    // ÇÖP KUTUSU (denetim turu 3, B10): silinmiş haber manşete/son dakikaya
+    // ALINAMAZ. Panel artık uyarıyor ama kapı SUNUCUDA olmalı — denetçi
+    // headlines.add ucunun çöpteki haber için hâlâ ok:true döndüğünü ölçtü.
+    // Sütun yoksa (göç 013 uygulanmamış) koşul atlanır.
+    if (trim((string)arr($row, 'deleted_at', '')) !== '') { return false; }
     $pa = (string)arr($row, 'published_at', '');
     return $pa === '' || $pa <= now();
 }
@@ -344,7 +349,7 @@ api_register('headlines.list', function () {
 
 api_register('headlines.add', function () {
     $id = vitrin_in_i('id', 0);
-    $post = q1('SELECT id, status, published_at, is_headline FROM posts WHERE id = :i', [':i' => $id]);
+    $post = q1('SELECT * FROM posts WHERE id = :i', [':i' => $id]);
     if (!$post) { json_err('Haber bulunamadı.'); }
     if (!vitrin_is_published($post)) { json_err('Yalnız yayındaki haberler manşete alınabilir.'); }
 
@@ -396,7 +401,7 @@ api_register('headlines.reorder', function () {
 api_register('headlines.breaking', function () {
     $id = vitrin_in_i('id', 0);
     $on = vitrin_in_i('on', 0) === 1 ? 1 : 0;
-    $post = q1('SELECT id, title, status, published_at FROM posts WHERE id = :i', [':i' => $id]);
+    $post = q1('SELECT * FROM posts WHERE id = :i', [':i' => $id]);
     if (!$post) { json_err('Haber bulunamadı.'); }
     if ($on === 1 && !vitrin_is_published($post)) {
         json_err('Yalnız yayındaki haberler son dakika olarak işaretlenebilir.');

@@ -284,3 +284,12 @@ body.giris-sayfasi{display:flex;align-items:center;justify-content:center;min-he
 .tek-satir{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
 .esnek{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .esnek-arasi{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+
+/* ---------------------------------------------------------- sekme sayacı (1.1-09 çöp kutusu) */
+.sekme-sayi{display:inline-block;min-width:18px;padding:1px 6px;margin-left:6px;border-radius:9px;
+  background:var(--cizgi);color:var(--soluk);font-size:11px;line-height:16px;text-align:center;font-weight:700}
+.sekmeler a.etkin .sekme-sayi{background:var(--vurgu);color:#fff}
+
+/* Üstveri kipi (1.1-02): SEO editörü yalnız üstveriyi düzenler, gövde kartları kilitli görünür. */
+.ustveri-kilit{opacity:.62}
+.ustveri-kilit input,.ustveri-kilit textarea,.ustveri-kilit select{background:var(--cizgi);cursor:not-allowed}

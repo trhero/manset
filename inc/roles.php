@@ -250,8 +250,14 @@ function user_grants_all($reload = false) {
  * Rolün etkin izin kümesi: kod haritası + doğrulanmış geçersiz kılmalar.
  * KİLİTLİ izinler için veritabanı YOK SAYILIR.
  */
-function roles_permissions_for($role) {
+function roles_permissions_for($role, $reset = false) {
     static $memo = [];
+    // $reset: roles_cache_reset() memo'yu da temizleyebilsin diye.
+    // Eskiden yalnız override/grant önbellekleri tazeleniyordu; cevabı asıl
+    // üreten BU memo bayat kalıyordu. Kısa ömürlü web isteğinde zararsızdı
+    // (yazma sonrası sayfa yenileniyor) ama fonksiyonun adı yanıltıcıydı ve
+    // cron/CLI gibi uzun ömürlü süreçlerde gerçekten bayat sonuç veriyordu.
+    if ($reset) { $memo = []; return []; }
     $role = (string)$role;
     if (isset($memo[$role])) { return $memo[$role]; }
 
@@ -398,7 +404,7 @@ function user_grant_set($userId, $permission, $allowed) {
 function roles_cache_reset() {
     role_overrides_all(true);
     user_grants_all(true);
-    // roles_permissions_for() memo'su istek ömürlüdür; yazma sonrası sayfa yenilenir.
+    roles_permissions_for('', true);   // çözülmüş izin kümesi memo'sunu da düşür
 }
 
 // ============================================================ kapsam ve üyelik
@@ -444,7 +450,15 @@ function post_can_read_full($post, $user) {
     $vis = is_array($post) ? (string)arr($post, 'visibility', 'public') : 'public';
     if ($vis === '' || $vis === 'public') { return true; }
     if (!$user) { return false; }
-    if (can($user, 'posts.view')) { return true; }
+
+    // `content.premium` = "aboneye özel içeriği okuma". Katalogda tam bunun için
+    // tanımlıydı ama hiçbir kapıda okunmuyordu (denetim turu 3, B07 sınıfı):
+    // yayıncı bir rolden bu izni kaldırsa da o rol premium içeriği okumaya devam
+    // ediyordu, çünkü kapı yalnız `posts.view`e bakıyordu. Personelin ödeme
+    // duvarını aşabilmesi PANELDE ÖNİZLEME yapabilmek içindir; hangi rolün bunu
+    // yapabileceği yayıncının kararı olmalıdır.
+    if (can($user, 'content.premium')) { return true; }
+
     if ($vis === 'members') { return true; }              // giriş yapmış her üye
     return member_tier($user) === 'premium';               // 'premium'
 }

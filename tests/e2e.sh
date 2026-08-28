@@ -11,6 +11,21 @@ set -u
 
 PHP="${PHP:-php}"
 PORT="${PORT:-8917}"
+
+# Veritabanı sürücüsü (1.1-11). Varsayılan sqlite; MySQL yolu CI'da koşar.
+# MySQL bağlantısı ortam değişkenlerinden gelir — yerelde MySQL yoksa
+# bu yol çalıştırılamaz, bilerek opt-in'dir.
+MANSET_DRIVER="${MANSET_DRIVER:-sqlite}"
+for arg in "$@"; do
+  case "$arg" in
+    --driver=*) MANSET_DRIVER="${arg#--driver=}" ;;
+  esac
+done
+DB_HOST="${MANSET_DB_HOST:-127.0.0.1}"
+DB_PORT="${MANSET_DB_PORT:-3306}"
+DB_NAME="${MANSET_DB_NAME:-manset_test}"
+DB_USER="${MANSET_DB_USER:-root}"
+DB_PASS="${MANSET_DB_PASS:-}"
 HOST="127.0.0.1"
 BASE="http://${HOST}:${PORT}"
 
@@ -164,7 +179,7 @@ expect_json_err() {
 }
 
 # ---------------------------------------------------------------- 0) hazırlık
-head1 "0 · Ortam"
+head1 "0 · Ortam (sürücü: ${MANSET_DRIVER})"
 
 if ! command -v "${PHP}" >/dev/null 2>&1 && [ ! -x "${PHP}" ]; then
   printf '%s\n' "$(c_red 'PHP bulunamadı.') PHP=/yol/php.exe ile belirtin."
@@ -294,7 +309,12 @@ post_form "${BASE}/install/?adim=2" \
   "admin_email=${ADMIN_EMAIL}" \
   "admin_pass=${ADMIN_PASS}" \
   "admin_pass2=${ADMIN_PASS}" \
-  "db_driver=sqlite" \
+  "db_driver=${MANSET_DRIVER}" \
+  "db_host=${DB_HOST}" \
+  "db_port=${DB_PORT}" \
+  "db_name=${DB_NAME}" \
+  "db_user=${DB_USER}" \
+  "db_pass=${DB_PASS}" \
   "theme=gazete"
 expect_code "kurulum gönderimi yönlendiriyor" "302"
 

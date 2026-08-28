@@ -13,11 +13,22 @@ $me = current_user();
 // ---------------------------------------------------------------- sayaçlar
 $sadeceKendi = can($me, 'posts.edit_any') ? '' : ' AND author_id = ' . (int)$me['id'];
 
-$sayacPublished = (int)qv('SELECT COUNT(*) FROM posts WHERE status = \'published\'' . $sadeceKendi, [], 0);
-$sayacDraft     = (int)qv('SELECT COUNT(*) FROM posts WHERE status = \'draft\'' . $sadeceKendi, [], 0);
-$sayacPending   = (int)qv('SELECT COUNT(*) FROM posts WHERE status = \'pending\'' . $sadeceKendi, [], 0);
-$sayacScheduled = (int)qv('SELECT COUNT(*) FROM posts WHERE status = \'scheduled\'' . $sadeceKendi, [], 0);
-$sayacViews     = (int)qv('SELECT COALESCE(SUM(view_count), 0) FROM posts', [], 0);
+/* NEDEN (denetim 3 · cop-izin B08→B09): Bu ekranın sayaçları ve "Son haberler"
+ * listesi çöp kutusunu süzmüyordu; silinmiş haber hâlâ "Yayında/Taslak" olarak
+ * sayılıyor ve listeden düzenlemeye açılabiliyordu. API karşılığı
+ * (dashboard.stats) zaten `deleted_at = ''` süzüyor — iki ekran aynı veriyi
+ * farklı gösteriyordu. Sütun yoksa (göç 013 uygulanmamış kurulum) koşul HİÇ
+ * eklenmez; bu yüzden schema_has_column ile korunuyor ve sorgu çökmez.
+ * `admin/pages/hizli.php` içindeki $copSuz kalıbının aynısı. */
+$copSuz = (function_exists('schema_has_column') && schema_has_column('posts', 'deleted_at'))
+    ? ' AND deleted_at = \'\'' : '';
+$copSuzP = $copSuz !== '' ? ' AND p.deleted_at = \'\'' : '';
+
+$sayacPublished = (int)qv('SELECT COUNT(*) FROM posts WHERE status = \'published\'' . $sadeceKendi . $copSuz, [], 0);
+$sayacDraft     = (int)qv('SELECT COUNT(*) FROM posts WHERE status = \'draft\'' . $sadeceKendi . $copSuz, [], 0);
+$sayacPending   = (int)qv('SELECT COUNT(*) FROM posts WHERE status = \'pending\'' . $sadeceKendi . $copSuz, [], 0);
+$sayacScheduled = (int)qv('SELECT COUNT(*) FROM posts WHERE status = \'scheduled\'' . $sadeceKendi . $copSuz, [], 0);
+$sayacViews     = (int)qv('SELECT COALESCE(SUM(view_count), 0) FROM posts WHERE 1 = 1' . $copSuz, [], 0);
 
 $sayacYorum = 0;
 if (can($me, 'comments.moderate') && schema_has_table('comments')) {
@@ -38,7 +49,7 @@ $sonHaberler = qa('SELECT p.id, p.title, p.slug, p.status, p.image, p.view_count
     FROM posts p
     LEFT JOIN categories c ON c.id = p.category_id
     LEFT JOIN users u ON u.id = p.author_id
-    WHERE 1 = 1' . ($sadeceKendi !== '' ? ' AND p.author_id = ' . (int)$me['id'] : '') . '
+    WHERE 1 = 1' . ($sadeceKendi !== '' ? ' AND p.author_id = ' . (int)$me['id'] : '') . $copSuzP . '
     ORDER BY COALESCE(p.published_at, p.created_at) DESC, p.id DESC LIMIT 8');
 
 // ---------------------------------------------------------------- son yorumlar

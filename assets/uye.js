@@ -114,11 +114,48 @@
       .catch(function () { return ''; });
   }
 
+  /* NEDEN (denetim 3 · onyuz B03): "Kaydet" düğmesi anonim ziyaretçiye de basılıyor
+     ve tıklanınca koşulsuz olarak public.csrf çağrılıyordu. O uç session_boot()
+     yapıp anonime `manset_sid` veriyor; o andan sonra ziyaretçi HİÇBİR sayfayı
+     önbellekten alamıyor (cache_should_serve → false) — üstelik ardından gelen
+     members.bookmark isteği 401 login_required ile boşa gidiyor. Yani çerez
+     hiçbir işe yaramadan veriliyor ve CONTRACTS §3.1 ("ön yüz anonime çerez
+     vermez") fiilen deliniyor.
+
+     SEÇİM: (b) — düğme herkese basılmaya devam eder (sayfa HTML'i anonim için
+     bugünküyle birebir aynı kalır, önbellek girdisi bozulmaz), ama uye.js
+     tıklamada ÖNCE oturum durumuna bakar; oturum yoksa HİÇBİR ağ isteği
+     yapmadan doğrudan data-giris adresine gider. (a) seçeneği — düğmeyi yalnız
+     üyeye basmak — sayfanın anonim/üye biçimlerini ayrıştırırdı, gereksiz.
+
+     NOT: `manset_sid` çerezi HttpOnly'dir (inc/bootstrap.php: 'httponly' => true),
+     bu yüzden document.cookie ile GÖRÜNMEZ; oturum durumunun tek güvenilir
+     istemci işareti, temanın sunucuda bastığı data-uye özniteliğidir
+     (member_current() oturum AÇMAZ, §3.1 korunur). Öznitelik hiç yoksa
+     (güncellenmemiş üçüncü taraf tema) eski davranışa düşeriz. */
+  function oturumVarMi(dugme) {
+    var im = dugme.getAttribute('data-uye');
+    if (im === null) {
+      // Tema işareti basmıyor: karar veremeyiz, eski akışı bozma.
+      return true;
+    }
+    if (im === '1') { return true; }
+    // İkincil işaret: çerez HttpOnly değilse (özel kurulum) yine de görülebilir.
+    return /(^|;\s*)manset_sid=/.test(document.cookie || '');
+  }
+
   /* -------------------------------------------------- haber kaydetme düğmesi */
   Array.prototype.forEach.call(document.querySelectorAll('[data-kaydet]'), function (dugme) {
     dugme.addEventListener('click', function () {
       var id = parseInt(dugme.getAttribute('data-kaydet'), 10) || 0;
       if (!id) { return; }
+
+      // Anonim ziyaretçi: ağ isteği YOK, çerez YOK — doğrudan giriş sayfasına.
+      if (!oturumVarMi(dugme)) {
+        window.location.href = dugme.getAttribute('data-giris') || '/hesap.php?s=giris';
+        return;
+      }
+
       dugme.disabled = true;
       csrfAl().then(function (anahtar) {
       return fetch(API + '?a=members.bookmark', {

@@ -1,5 +1,11 @@
-# Yüklenen dosyalarda PHP çalıştırılmaz
-php_flag engine off
+# Yüklenen dosyalarda PHP çalıştırılmaz.
+#
+# `php_flag` YALNIZ mod_php'nin tanıdığı bir direktiftir. PHP'nin FPM/CGI
+# olarak çalıştığı sunucularda (bugün paylaşımlı hostingde yaygın) Apache bu
+# satırı bilmez ve dizinin TAMAMI için 500 üretir — bütün görseller kırılır.
+# Bu yüzden koşulsuz bir php_flag satırı YOKTUR; mod_php blokları koşullu,
+# RemoveHandler/AddType/Options ise SAPI'den bağımsız olarak her Apache'de
+# çalışır ve asıl korumayı onlar sağlar.
 <IfModule mod_php.c>
   php_flag engine off
 </IfModule>
@@ -9,6 +15,15 @@ php_flag engine off
 <IfModule mod_php8.c>
   php_flag engine off
 </IfModule>
+# SetHandler None: RemoveHandler, `AddHandler` ile kurulmuş eşlemeleri kaldırır
+# ama `<FilesMatch> SetHandler proxy:fcgi` (PHP-FPM'in yaygın kurulumu) ile
+# konmuş bir işleyiciyi GERİ ALMAZ. Bu blok onu da sıfırlar
+# (denetim turu 3, B11-03 — derinlemesine savunma; medya katmanı zaten
+# yalnız jpg/png/gif/webp kabul ediyor ve finfo + getimagesize ile doğruluyor).
+<FilesMatch "\.(php|php3|php4|php5|php7|php8|phtml|phar|cgi|pl|py|shtml)$">
+  SetHandler None
+  Require all denied
+</FilesMatch>
 AddType text/plain .php .php3 .php4 .php5 .php7 .php8 .phtml .phar .cgi .pl .py .shtml
 Options -ExecCGI -Indexes
 RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .php8 .phar

@@ -66,6 +66,17 @@ api_register('public.comment', function () {
         json_err('Yorum yapabilmek için giriş yapmanız gerekiyor.', 401);
     }
 
+    // 4b) YORUM YAZMA İZNİ (denetim turu 3, B07).
+    // `comments.write` katalogda tanımlıydı ve rol matrisinde açılıp
+    // kapatılabiliyordu ama HİÇBİR KAPIDA okunmuyordu: yönetici taciz eden
+    // bir üyeyi susturmak için izni kapatıyor, kayıt yazılıyor ve hiçbir şey
+    // olmuyordu. Matrisin sunduğu bir düğmenin işlevsiz olması, güvenlik
+    // açığından beter: yayıncı önlem aldığını sanır.
+    // Yalnız OTURUMLU kullanıcıya uygulanır; anonim yolu comments_anonymous yönetir.
+    if ($user && !can($user, 'comments.write')) {
+        json_err('Yorum yazma yetkiniz kaldırılmış.', 403);
+    }
+
     // 5) KVKK onayı
     $kvkk = public_field('kvkk', '');
     $kvkkOk = ($kvkk === 1 || $kvkk === '1' || $kvkk === true || $kvkk === 'on' || $kvkk === 'true');
@@ -201,3 +212,64 @@ api_register('public.view', function () {
     post_register_view($id);
     return ['ok' => true, 'counted' => true];
 }, ['perm' => 'public', 'methods' => ['POST'], 'csrf' => false]);
+
+/**
+ * public.health — dış izleyici için sağlık özeti.
+ *
+ * ANAHTARLI: `health_key` ayarı boşsa uç KAPALIDIR (varsayılan kapalı).
+ * Anahtar `?key=` ile ya da `X-Health-Key` başlığıyla verilir. Anahtarsız
+ * açık bırakmak disk/sürüm/kuyruk bilgisini herkese açardı.
+ *
+ * Dönen alanlar bilinçli olarak SAYISAL/ÖZET — dosya yolu, sürüm dizini,
+ * kullanıcı adı gibi ayrıntı sızdırmaz.
+ */
+api_register('public.health', function () {
+    $anahtar = (string)setting('health_key', '');
+    if ($anahtar === '') { json_err('Sağlık ucu kapalı.', 404); }
+
+    // Hız sınırı ZORUNLU (denetim turu 3): anahtar kaba kuvvete açıktı ve
+    // yanlış denemeler hiçbir yere yazılmıyordu. Diğer kimlik uçlarında
+    // (panel girişi, cron) ikisi de var; burada yoktu.
+    if (!rate_limit('health:' . client_ip(), 10, 300)) {
+        json_err('Çok fazla deneme.', 429);
+    }
+    $gelen = (string)(isset($_GET['key']) ? $_GET['key'] : '');
+    if ($gelen === '' && isset($_SERVER['HTTP_X_HEALTH_KEY'])) { $gelen = (string)$_SERVER['HTTP_X_HEALTH_KEY']; }
+    if (!hash_equals($anahtar, $gelen)) {
+        log_error('public.health: yanlış anahtar', client_ip());
+        json_err('Yetkisiz.', 403);
+    }
+
+    $simdi = time();
+
+    // Cron bayatlığı: son çalışma üstünden geçen dakika.
+    $sonCron = (string)setting('cron_last_run', '');
+    $cronYas = $sonCron !== '' ? max(0, (int)round(($simdi - strtotime($sonCron)) / 60)) : -1;
+
+    // Disk ve veritabanı boyutu
+    $bosDisk = @disk_free_space(ROOT_DIR);
+    $dbBoyut = 0;
+    if (db_driver() === 'sqlite') {
+        $yol = (string)cfg('db_path', DB_DIR . '/manset.sqlite');
+        if (is_file($yol)) { $dbBoyut = (int)@filesize($yol); }
+    }
+
+    // Bekleyen kuyruklar (tablo yoksa 0)
+    $sayac = function ($sql) {
+        try { return (int)qv($sql, [], 0); } catch (Throwable $e) { return 0; }
+    };
+
+    return [
+        'surum'          => MANSET_VERSION,
+        'kurulu_surum'   => setting('installed_version', ''),
+        'goc_bekliyor'   => function_exists('upgrade_pending') ? (upgrade_pending() ? 1 : 0) : 0,
+        'cron_yas_dk'    => $cronYas,
+        'disk_bos_mb'    => $bosDisk === false ? -1 : (int)round($bosDisk / 1048576),
+        'db_mb'          => (int)round($dbBoyut / 1048576),
+        'bekleyen_haber' => $sayac('SELECT COUNT(*) FROM posts WHERE status = \'pending\''),
+        'bekleyen_yorum' => $sayac('SELECT COUNT(*) FROM comments WHERE status = \'pending\''),
+        'ai_bekleyen'    => $sayac('SELECT COUNT(*) FROM ai_jobs WHERE status = \'pending\''),
+        'ai_hatali'      => $sayac('SELECT COUNT(*) FROM ai_jobs WHERE status = \'failed\''),
+        'zaman'          => now(),
+    ];
+}, ['perm' => 'public', 'methods' => ['GET'], 'csrf' => false]);

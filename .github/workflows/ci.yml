@@ -1,0 +1,221 @@
+# Manşet — sürekli tümleştirme.
+#
+# DEĞİŞMEZ KISIT: proje Composer/npm KULLANMAZ. Burada da hiçbir paket yöneticisi
+# çağrılmaz; PHP eklentileri doğrudan shivammathur/setup-php ile kurulur.
+#
+# İki iş vardır:
+#   surucu-sqlite : PHP 8.0 / 8.2 / 8.4 × SQLite (varsayılan sürücü)
+#   surucu-mysql  : PHP 8.2 × MySQL 8 (services) — tests/mysql-kur.php ile
+name: CI
+
+on:
+  push:
+    branches: [main, master, 'surum-*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ==========================================================================
+  # SQLite yolu — asıl matris
+  # ==========================================================================
+  surucu-sqlite:
+    name: SQLite · PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.0', '8.2', '8.4']
+
+    steps:
+      - name: Kaynağı al
+        uses: actions/checkout@v4
+
+      - name: PHP ${{ matrix.php }} kur
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo_sqlite, pdo_mysql, gd, curl, mbstring, zip, fileinfo, dom, json, xml
+          coverage: none
+          tools: none          # Composer YOK — bilerek
+
+      - name: Sürüm ve eklentiler
+        run: |
+          php -v
+          php -m
+
+      # ------------------------------------------------------------------
+      # 1) Sözdizimi — dağıtım çıktısı ve denetim artıkları hariç TÜM dosyalar
+      # ------------------------------------------------------------------
+      - name: Sözdizimi denetimi (php -l)
+        run: |
+          set -e
+          hata=0
+          adet=0
+          while IFS= read -r dosya; do
+            adet=$((adet + 1))
+            if ! php -l "$dosya" > /dev/null 2>&1; then
+              echo "::error file=${dosya}::sözdizimi hatası"
+              php -l "$dosya" || true
+              hata=1
+            fi
+          done < <(find . -name '*.php' \
+                     -not -path './.git/*' \
+                     -not -path './dist/*' \
+                     -not -path './audit2/*' \
+                     -not -path './tests/.run/*' | sort)
+          echo "${adet} PHP dosyası denetlendi."
+          exit $hata
+
+      # ------------------------------------------------------------------
+      # 2) Sözleşme denetimi — CONTRACTS §0: SQL içinde yalnız tek tırnak
+      # ------------------------------------------------------------------
+      - name: SQL tek tırnak kuralı
+        run: php tests/kural-sql.php .
+
+      # ------------------------------------------------------------------
+      # 3) Birim testleri — Composer'sız koşucu (tests/unit/run.php)
+      #    Kendi yalıtılmış SQLite örneğini kurar; config.php üretmez.
+      # ------------------------------------------------------------------
+      - name: Birim testleri
+        run: php tests/unit/run.php
+
+      # ------------------------------------------------------------------
+      # 4) Uçtan uca — gerçek PHP sunucusu + curl
+      # ------------------------------------------------------------------
+      - name: Uçtan uca testler (SQLite)
+        run: bash tests/e2e.sh
+        env:
+          PHP: php
+          PORT: '8917'
+
+      - name: Başarısızlıkta sunucu günlüğü
+        if: failure()
+        run: |
+          echo '--- tests/.server.log (son 200 satır) ---'
+          tail -200 tests/.server.log 2>/dev/null || echo '(günlük yok)'
+          echo '--- db/error.log (son 100 satır) ---'
+          tail -100 tests/.run/db/error.log 2>/dev/null || echo '(günlük yok)'
+
+  # ==========================================================================
+  # MySQL yolu — ayrı iş, tek PHP sürümü
+  # ==========================================================================
+  surucu-mysql:
+    name: MySQL 8 · PHP 8.2
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: manset
+          MYSQL_DATABASE: manset_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pmanset"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    # tests/mysql-kur.php ve (orkestratörün ekleyeceği) e2e.sh --driver=mysql
+    # kipi bağlantı bilgilerini BU değişkenlerden okur. Parola komut satırında
+    # geçirilmez; ps çıktısında görünürdü.
+    env:
+      MANSET_DB_HOST: '127.0.0.1'
+      MANSET_DB_PORT: '3306'
+      MANSET_DB_NAME: 'manset_test'
+      MANSET_DB_USER: 'root'
+      MANSET_DB_PASS: 'manset'
+
+    steps:
+      - name: Kaynağı al
+        uses: actions/checkout@v4
+
+      - name: PHP 8.2 kur
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_sqlite, pdo_mysql, gd, curl, mbstring, zip, fileinfo, dom, json, xml
+          coverage: none
+          tools: none          # Composer YOK
+
+      - name: SQL tek tırnak kuralı
+        run: php tests/kural-sql.php .
+
+      # Birim testleri sürücüden bağımsızdır (kendi SQLite örneğini kurar);
+      # burada yalnız MySQL'li iş de yeşil/kırmızı sinyal versin diye koşulur.
+      - name: Birim testleri
+        run: php tests/unit/run.php
+
+      # ------------------------------------------------------------------
+      # MySQL hazır mı + boş veritabanı
+      # ------------------------------------------------------------------
+      - name: MySQL bekle ve boş veritabanı hazırla
+        run: php tests/mysql-kur.php --bos --bekle=60
+
+      # ------------------------------------------------------------------
+      # Şema/tohum yolunun MySQL'de çalıştığını doğrula.
+      # --hedef ile config.php proje köküne DEĞİL, geçici bir dizine yazılır;
+      # e2e kendi kopyasını kuracağı için kökteki durum kirlenmemeli.
+      # ------------------------------------------------------------------
+      - name: Şema ve tohum (MySQL)
+        run: |
+          set -e
+          mkdir -p tests/.mysql-kok/install
+          php tests/mysql-kur.php --hedef=tests/.mysql-kok --force
+          php -r '
+            $c = require "tests/.mysql-kok/config.php";
+            if ($c["db_driver"] !== "mysql") { fwrite(STDERR, "sürücü mysql değil\n"); exit(1); }
+            $pdo = new PDO("mysql:host=".$c["db_host"].";port=".$c["db_port"].";dbname=".$c["db_name"].";charset=utf8mb4",
+                           $c["db_user"], $c["db_pass"], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+            $n = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()")->fetchColumn();
+            echo $n, " tablo kuruldu\n";
+            if ($n < 10) { fwrite(STDERR, "beklenenden az tablo\n"); exit(1); }
+            $u = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
+            if ($u < 1) { fwrite(STDERR, "yönetici tohumlanmadı\n"); exit(1); }
+            echo "tohum tamam\n";
+          '
+          rm -rf tests/.mysql-kok
+
+      # ------------------------------------------------------------------
+      # Uçtan uca (MySQL)
+      #
+      # BAĞLANMA NOKTASI: tests/e2e.sh şu an kurulum sihirbazına db_driver=sqlite
+      # gönderir (bkz. e2e.sh "3 · Kurulum sihirbazı"). Orkestratör oraya
+      # --driver=mysql desteğini ekleyecek; beklenen davranış:
+      #
+      #   1. --driver=mysql verilince e2e, kurulumdan ÖNCE
+      #      `php tests/mysql-kur.php --bos --bekle=60` çağırır (boş şema).
+      #   2. install/?adim=2 formuna sqlite yerine
+      #      db_driver=mysql, db_host/db_port/db_name/db_user/db_pass alanlarını
+      #      MANSET_DB_* ortam değişkenlerinden doldurur.
+      #   3. SQLite'a özgü iddialar (db/*.sqlite dosya adı denetimi gibi)
+      #      bu kipte atlanır.
+      #
+      # Bayrak inene kadar adım "atlandı" der ve işi kırmızıya çevirmez;
+      # e2e.sh --driver'ı tanır tanımaz kendiliğinden gerçek koşuya geçer.
+      # ------------------------------------------------------------------
+      - name: Uçtan uca testler (MySQL)
+        run: |
+          if grep -q -- '--driver' tests/e2e.sh; then
+            bash tests/e2e.sh --driver=mysql
+          else
+            echo '::notice::tests/e2e.sh henüz --driver=mysql desteklemiyor; MySQL uçtan uca koşusu atlandı.'
+            echo 'Şema, tohum ve sürücü yolu yukarıdaki adımlarda doğrulandı.'
+          fi
+        env:
+          PHP: php
+          PORT: '8917'
+
+      - name: Başarısızlıkta sunucu günlüğü
+        if: failure()
+        run: |
+          echo '--- tests/.server.log (son 200 satır) ---'
+          tail -200 tests/.server.log 2>/dev/null || echo '(günlük yok)'

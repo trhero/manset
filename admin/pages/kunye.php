@@ -7,7 +7,12 @@
  * (settings.manage izniyle) girilebilir.
  */
 if (!defined('MANSET_BOOTSTRAPPED')) { exit; }
-require_can('settings.manage');
+// Künye yayıncı kimliğidir; USER_TYPES_PLAN'da Genel Yayın Yönetmeni'nin işi
+// olarak tanımlı ve `kunye.manage` izni tam bunun için var. Ekran eskiden
+// KİLİTLİ `settings.manage` istiyordu: chief_editor belgelenmiş görevini
+// yapamıyor, izin ise hiçbir kapıda okunmadığı için ölü duruyordu
+// (denetim turu 3, B07 sınıfı).
+require_can('kunye.manage');
 
 $adminPageTitle = 'Künye / BİK';
 

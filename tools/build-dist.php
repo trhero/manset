@@ -6,7 +6,8 @@
  *
  * Üretilen zip, paylaşımlı hostinge FTP ile açılıp doğrudan kurulabilir hâldedir.
  * Dışarıda bırakılanlar: config.php, db/*.sqlite*, db/error.log, install/.locked,
- * tests/, tools/, proposals/, audit2/, .git/, NOTES.md, CONTRACTS.md, uploads içeriği.
+ * tests/, tools/, proposals/, audit2/, audit3/, gelistirme/, .git/, NOTES.md,
+ * CONTRACTS.md, uploads içeriği.
  * docs/ PAKETE GİRER — README oradaki BİK notlarına bağlantı veriyor.
  */
 
@@ -36,7 +37,7 @@ if ($name === 'manset') { $name = 'manset-' . $version; }
 /** Pakete girmeyecek yollar (kökten göreli, önek eşleşmesi). */
 function dist_excluded_prefixes() {
     return [
-        '.git/', '.github/', 'dist/', 'tests/', 'tools/', 'proposals/', 'audit2/',
+        '.git/', '.github/', 'dist/', 'tests/', 'tools/', 'proposals/', 'audit2/', 'audit3/', 'gelistirme/',
         'node_modules/', '.vscode/', '.idea/',
     ];
 }
@@ -45,7 +46,7 @@ function dist_excluded_prefixes() {
 function dist_excluded_files() {
     return [
         'config.php', 'install/.locked', 'db/error.log', 'db/error.log.1',
-        'NOTES.md', 'CONTRACTS.md', 'USER_TYPES_PLAN.md', 'SECURITY_AUDIT.md',
+        'NOTES.md', 'CONTRACTS.md', 'USER_TYPES_PLAN.md', 'SECURITY_AUDIT.md', 'GELISTIRME_PLANI.md',
         '.gitattributes', '.gitignore',
     ];
 }

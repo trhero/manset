@@ -18,10 +18,33 @@ $durumlar = [
     'answered' => 'Yanıtlanan',
     'rejected' => 'Reddedilen',
     'all'      => 'Tümü',
+    CORRECTION_KIND_UPDATE => 'Güncelleme notları',
 ];
 
 $durum = (string)inp('durum', 'pending');
 if (!isset($durumlar[$durum])) { $durum = 'pending'; }
+$guncellemeSekmesi = ($durum === CORRECTION_KIND_UPDATE);
+
+// ---------------------------------------------------------------- ayar kaydı
+// Yasal süre eşiği KODA GÖMÜLÜ DEĞİLDİR (mevzuat değişebilir). Yalnız genel
+// ayar yetkisi olan kullanıcı değiştirebilir.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && inp('do') === 'sure_ayar') {
+    csrf_guard();
+    require_can('settings.manage');
+    $saat = max(1, min(720, inp_i('deadline_hours', corrections_deadline_hours())));
+    setting_set_many([
+        'corrections_deadline_hours' => (string)$saat,
+        'corrections_notify_enabled' => inp('notify', '') === '1' ? '1' : '0',
+    ]);
+    settings_all(true);
+    if (function_exists('cache_flush')) { cache_flush(); }
+    flash('ok', 'Düzeltme ayarları kaydedildi. Yanıt süresi eşiği: ' . $saat . ' saat.');
+    header('Location: ' . admin_url('corrections', ['durum' => $durum]), true, 302);
+    exit;
+}
+
+$esikSaat   = corrections_deadline_hours();
+$bildirimAcik = corrections_mail_available();
 
 $sayfa   = max(1, inp_i('sayfa', 1));
 $perPage = 30;
@@ -52,8 +75,10 @@ $jsFlags = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS 
 
 <?php if ($geciken > 0): ?>
   <div class="uyari err" role="alert">
-    <strong>Süresi geçmiş <?= (int)$geciken ?> bekleyen talep var.</strong>
-    Düzeltme ve cevap yazısı, alındığı tarihten itibaren en geç bir gün içinde yayımlanmalıdır.
+    <strong>GECİKTİ — süresi geçmiş <?= (int)$geciken ?> bekleyen talep var.</strong>
+    Sitede tanımlı yanıt süresi eşiği <strong><?= (int)$esikSaat ?> saat</strong>tir; bu talepler
+    eşiği aşmıştır. Düzeltme ve cevap yazısının yayımlanması yasal bir yükümlülüktür
+    (bkz. <code>docs/BIK-NOTLARI.md</code> §4).
   </div>
 <?php endif; ?>
 
@@ -64,13 +89,50 @@ $jsFlags = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS 
   <?php endif; ?>
 </div>
 
-<div class="uyari warn">
-  Basın Kanunu m.14 uyarınca düzeltme ve cevap yazısı, alındığı tarihten itibaren
-  <strong>en geç bir gün içinde</strong>, aynı puntolarla ve URL bağlantısı sağlanarak yayımlanır.
-  Yayımlanan metin ilgili haberin altında <strong>bir hafta</strong>, ana sayfada ise
-  <strong>ilk 24 saat</strong> görünür kalır.
-  <span class="mini soluk">(Özet: <code>docs/BIK-NOTLARI.md</code> §4 — hukuki görüş değildir.)</span>
-</div>
+<?php if ($guncellemeSekmesi): ?>
+  <div class="uyari bilgi">
+    <strong>Güncelleme notu, düzeltme/tekzip DEĞİLDİR.</strong>
+    Yayımlanmış bir haber sonradan değiştirildiğinde okura görünür kılınan
+    <em>editoryal</em> açıklamadır; yasal yanıt süresine tabi değildir ve süresiz görünür.
+    Okuyucunun düzeltme ve cevap talebi ise diğer sekmelerde yönetilir.
+  </div>
+<?php else: ?>
+  <div class="uyari warn">
+    Basın Kanunu m.14 uyarınca düzeltme ve cevap yazısı, alındığı tarihten itibaren
+    <strong>süresi içinde</strong>, aynı puntolarla ve URL bağlantısı sağlanarak yayımlanır.
+    Kaynak belgedeki özet süre <strong>bir gün</strong>dür; bu ekranda kullanılan eşik
+    <strong><?= (int)$esikSaat ?> saat</strong> olarak ayarlanmıştır.
+    Yayımlanan metin ilgili haberin altında <strong>bir hafta</strong>, ana sayfada ise
+    <strong>ilk 24 saat</strong> görünür kalır.
+    <span class="mini soluk">(Özet: <code>docs/BIK-NOTLARI.md</code> §4 — hukuki görüş değildir;
+    <strong>yayıncı yürürlükteki güncel yönetmeliği teyit etmelidir</strong>.)</span>
+  </div>
+<?php endif; ?>
+
+<?php if (can(current_user(), 'settings.manage')): ?>
+  <details class="kart bosluk-alt">
+    <summary><strong>Süre ve bildirim ayarları</strong></summary>
+    <form method="post" action="<?= esc(admin_url('corrections', ['durum' => $durum])) ?>" class="form-satir">
+      <?= csrf_field() ?>
+      <input type="hidden" name="do" value="sure_ayar">
+      <label class="form-alan" style="max-width:280px">
+        Yanıt süresi eşiği (saat)
+        <input type="number" name="deadline_hours" min="1" max="720" value="<?= (int)$esikSaat ?>">
+        <span class="form-yardim">Süre rozetleri ve “GECİKTİ” uyarısı bu değere göre hesaplanır.
+        Mevzuat değişirse buradan güncelleyin; koda gömülü değildir.</span>
+      </label>
+      <label class="form-alan">
+        <input type="checkbox" name="notify" value="1"
+               <?= setting('corrections_notify_enabled', '1') === '1' ? 'checked' : '' ?>>
+        Başvurana sonuç e-postası gönder
+        <span class="form-yardim">Tek alıcılı, işlemsel bildirim: talep yayımlandığında ya da
+        reddedildiğinde başvurana gönderilir. Toplu gönderim yapılmaz.
+        <?= $bildirimAcik ? '' : '<strong>Şu anda sunucuda e-posta gönderimi kapalı; gönderim sessizce atlanır.</strong>' ?></span>
+      </label>
+      <p><button type="submit" class="dugme birincil">Kaydet</button></p>
+    </form>
+  </details>
+<?php endif; ?>
 
 <nav class="sekmeler" aria-label="Talep durumu">
   <?php foreach ($durumlar as $k => $etiket): ?>
@@ -80,26 +142,42 @@ $jsFlags = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS 
   <?php endforeach; ?>
 </nav>
 
+<?php if ($guncellemeSekmesi && can(current_user(), 'posts.edit_any')): ?>
+  <p class="bosluk-alt">
+    <button type="button" class="dugme birincil" id="notEkle">Güncelleme notu ekle</button>
+    <span class="mini soluk">Haber numarasını Haberler ekranından alabilirsiniz.</span>
+  </p>
+<?php endif; ?>
+
 <?php if (!$talepler): ?>
   <div class="bos-durum">
-    <span class="buyuk" aria-hidden="true">⚖</span>
-    <h3><?= $durum === 'pending' ? 'Bekleyen talep yok' : 'Bu listede talep yok' ?></h3>
-    <p>Okuyucular haber sayfalarındaki “Düzeltme talep et” formunu kullandığında talepler burada listelenir.</p>
+    <span class="buyuk" aria-hidden="true"><?= $guncellemeSekmesi ? '✎' : '⚖' ?></span>
+    <?php if ($guncellemeSekmesi): ?>
+      <h3>Güncelleme notu yok</h3>
+      <p>Yayımlanmış bir haber sonradan değiştirildiğinde, okura görünür bir
+         “Güncelleme” notu düşebilirsiniz. Bu not düzeltme/tekzip değildir.</p>
+    <?php else: ?>
+      <h3><?= $durum === 'pending' ? 'Bekleyen talep yok' : 'Bu listede talep yok' ?></h3>
+      <p>Okuyucular haber sayfalarındaki “Düzeltme talep et” formunu kullandığında talepler burada listelenir.</p>
+    <?php endif; ?>
   </div>
 <?php else: ?>
 
   <div class="arac-cubugu">
-    <span class="kucuk soluk"><?= (int)$toplam ?> talep</span>
-    <span class="sag kucuk soluk">Süre rozeti, talebin alındığı andan itibaren bir günlük süreyi gösterir.</span>
+    <span class="kucuk soluk"><?= (int)$toplam ?> <?= $guncellemeSekmesi ? 'güncelleme notu' : 'talep' ?></span>
+    <?php if (!$guncellemeSekmesi): ?>
+      <span class="sag kucuk soluk">Süre rozeti, talebin alındığı andan itibaren
+        <?= (int)$esikSaat ?> saatlik yanıt süresini gösterir.</span>
+    <?php endif; ?>
   </div>
 
   <div class="tablo-sarma">
     <table class="tablo">
       <thead>
         <tr>
-          <th class="dar">Süre</th>
-          <th>Talep</th>
-          <th class="dar">Başvuran</th>
+          <th class="dar"><?= $guncellemeSekmesi ? 'Durum' : 'Süre / yaş' ?></th>
+          <th><?= $guncellemeSekmesi ? 'Not' : 'Talep' ?></th>
+          <th class="dar"><?= $guncellemeSekmesi ? 'Ekleyen' : 'Başvuran' ?></th>
           <th class="dar">Haber</th>
           <th class="dar">Tarih</th>
           <th class="islem">İşlem</th>
@@ -113,8 +191,22 @@ $jsFlags = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS 
           $uzunMu = mb_strlen((string)$t['message']) > mb_strlen($kisa); ?>
           <tr data-talep="<?= (int)$t['id'] ?>">
             <td class="dar">
+              <?php if ($sure['durum'] === 'gecti' && (string)$t['status'] === 'pending'): ?>
+                <?= admin_badge('GECİKTİ', 'olumsuz') ?>
+              <?php endif; ?>
               <?= admin_badge($sure['etiket'], $sure['ton']) ?>
+              <?php if (!$guncellemeSekmesi): ?>
+                <span class="satir-alt mini soluk">Yaş: <?= esc((string)arr($sure, 'yas', '')) ?></span>
+              <?php endif; ?>
               <span class="satir-alt mini"><?= admin_badge($dEtiket, $dTon) ?></span>
+              <?php $isleyen = trim((string)arr($t, 'handled_name', '')); ?>
+              <?php if ($isleyen !== ''): ?>
+                <span class="satir-alt mini soluk" title="corrections.handled_by">
+                  İşlem: <?= esc($isleyen) ?>
+                </span>
+              <?php elseif ((int)arr($t, 'handled_by', 0) > 0): ?>
+                <span class="satir-alt mini soluk">İşlem: #<?= (int)$t['handled_by'] ?></span>
+              <?php endif; ?>
             </td>
             <td>
               <div class="talep-govde"><?= nl2br(esc($kisa)) ?></div>
@@ -141,8 +233,12 @@ $jsFlags = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS 
             </td>
             <td class="dar">
               <strong><?= esc((string)$t['name']) ?></strong>
-              <span class="satir-alt tek-satir"><?= esc((string)$t['email']) ?></span>
-              <span class="satir-alt mini">IP: <?= esc((string)$t['ip']) ?></span>
+              <?php if (trim((string)$t['email']) !== ''): ?>
+                <span class="satir-alt tek-satir"><?= esc((string)$t['email']) ?></span>
+              <?php endif; ?>
+              <?php if (trim((string)$t['ip']) !== ''): ?>
+                <span class="satir-alt mini">IP: <?= esc((string)$t['ip']) ?></span>
+              <?php endif; ?>
             </td>
             <td class="dar">
               <?php if ((string)arr($t, 'post_title', '') !== ''): ?>
@@ -161,14 +257,18 @@ $jsFlags = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS 
               <?= esc(tr_ago((string)$t['created_at'])) ?>
             </td>
             <td class="islem">
-              <button type="button" class="dugme kucuk birincil" data-yanitla="<?= (int)$t['id'] ?>">
-                <?= (string)$t['status'] === 'answered' ? 'Yanıtı düzenle' : 'Yanıtla' ?>
-              </button>
-              <?php if ((string)$t['status'] !== 'rejected'): ?>
-                <button type="button" class="dugme kucuk" data-reddet="<?= (int)$t['id'] ?>">Reddet</button>
+              <?php if ($guncellemeSekmesi): ?>
+                <button type="button" class="dugme kucuk tehlike" data-notsil="<?= (int)$t['id'] ?>">Notu sil</button>
+              <?php else: ?>
+                <button type="button" class="dugme kucuk birincil" data-yanitla="<?= (int)$t['id'] ?>">
+                  <?= (string)$t['status'] === 'answered' ? 'Yanıtı düzenle' : 'Yanıtla' ?>
+                </button>
+                <?php if ((string)$t['status'] !== 'rejected'): ?>
+                  <button type="button" class="dugme kucuk" data-reddet="<?= (int)$t['id'] ?>">Reddet</button>
+                <?php endif; ?>
+                <button type="button" class="dugme kucuk tehlike" data-sil="<?= (int)$t['id'] ?>"
+                        data-onay="Talep kalıcı olarak silinecek. Onaylıyor musunuz?">Sil</button>
               <?php endif; ?>
-              <button type="button" class="dugme kucuk tehlike" data-sil="<?= (int)$t['id'] ?>"
-                      data-onay="Talep kalıcı olarak silinecek. Onaylıyor musunuz?">Sil</button>
             </td>
           </tr>
         <?php endforeach; ?>
@@ -259,6 +359,57 @@ M.hazir(function () {
             setTimeout(function () { location.reload(); }, 500);
           } else { btn.disabled = false; }
         });
+      });
+    });
+  });
+
+  /* ------------------------------------------------ güncelleme notu ekle
+     Editoryal not — düzeltme/tekzip DEĞİLDİR, yasal süreye tabi değildir. */
+  var notEkleDugme = document.getElementById('notEkle');
+  if (notEkleDugme) {
+    notEkleDugme.addEventListener('click', function () {
+      var govde = M.modal.ac('Güncelleme notu ekle', ''
+        + '<div class="uyari bilgi">Bu not <strong>düzeltme/tekzip değildir</strong>. '
+        + 'Yayımlanmış bir haberin sonradan değiştirildiğini okura bildirir ve haberin altında '
+        + 'süresiz görünür.</div>'
+        + '<div class="form-alan">'
+        + '  <label for="notPostId">Haber numarası (ID)</label>'
+        + '  <input type="number" id="notPostId" min="1" step="1">'
+        + '</div>'
+        + '<div class="form-alan">'
+        + '  <label for="notMetni">Güncelleme notu</label>'
+        + '  <textarea id="notMetni" rows="5" '
+        + '    placeholder="Örn. Haberin ikinci paragrafındaki rakam kurum açıklamasıyla güncellendi."></textarea>'
+        + '  <span class="form-yardim">En az 5 karakter. Düz metin girin; satır sonları korunur.</span>'
+        + '</div>'
+        + '<div class="dugme-grup"><button type="button" class="dugme birincil" id="notKaydet">Ekle</button>'
+        + '<button type="button" class="dugme" id="notVazgec">Vazgeç</button></div>', '620px');
+
+      govde.querySelector('#notVazgec').addEventListener('click', M.modal.kapat);
+      govde.querySelector('#notKaydet').addEventListener('click', function () {
+        var btn = this;
+        btn.disabled = true;
+        M.api('corrections.update_add', {
+          post_id: parseInt(govde.querySelector('#notPostId').value, 10) || 0,
+          text: govde.querySelector('#notMetni').value
+        }).then(function (r) {
+          if (M.sonuc(r, 'Güncelleme notu eklendi.')) {
+            M.modal.kapat();
+            setTimeout(function () { location.reload(); }, 500);
+          } else { btn.disabled = false; }
+        });
+      });
+    });
+  }
+
+  /* ------------------------------------------------ güncelleme notunu sil */
+  M.qsa('[data-notsil]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (!confirm('Güncelleme notu silinecek. Onaylıyor musunuz?')) { return; }
+      b.disabled = true;
+      M.api('corrections.update_delete', { id: parseInt(b.getAttribute('data-notsil'), 10) }).then(function (r) {
+        if (M.sonuc(r, 'Güncelleme notu silindi.')) { setTimeout(function () { location.reload(); }, 450); }
+        else { b.disabled = false; }
       });
     });
   });

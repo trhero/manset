@@ -76,6 +76,7 @@ function ai_api_job_row(array $j) {
         'post_id'     => (int)arr($j, 'result_post_id', 0),
         'post_title'  => (string)arr($j, 'post_title', ''),
         'error'       => (string)arr($j, 'error', ''),
+        'retry_after' => (string)arr($j, 'retry_after', ''),
         'created_at'  => (string)arr($j, 'created_at', ''),
         'started_at'  => (string)arr($j, 'started_at', ''),
         'finished_at' => (string)arr($j, 'finished_at', ''),
@@ -112,6 +113,32 @@ api_register('ai.save_settings', function () {
         $save['ai_enabled'] = ($v === '1' || $v === 1 || $v === true) ? '1' : '0';
     }
 
+    // Aylık bütçe tavanı (0 = sınırsız). Tavan aşılınca yeni çağrı yapılmaz,
+    // kuyruk durur ama iş kaybolmaz (1.1-07).
+    if (ai_api_has('monthly_budget')) {
+        $v = trim(str_replace(',', '.', (string)ai_api_field('monthly_budget', '')));
+        if ($v === '') { $v = '0'; }
+        if (!is_numeric($v) || (float)$v < 0 || (float)$v > 10000000) {
+            json_err('Aylık bütçe sayı olmalı (0 = sınırsız).', 400);
+        }
+        $save['ai_monthly_budget'] = (string)(float)$v;
+    }
+
+    /*
+     * Aylık ÇAĞRI tavanı (B08). NEDEN: para cinsinden tavan yalnız birim fiyat
+     * girilmişse ölçülebiliyor; varsayılan kurulumda hiç korumuyordu. Çağrı
+     * sayısı ai_logs'tan fiyat gerektirmeden sayılır, bu yüzden her kurulumda
+     * çalışan ikinci bir tavandır. 0 = sınırsız.
+     */
+    if (ai_api_has('monthly_calls')) {
+        $v = trim((string)ai_api_field('monthly_calls', ''));
+        if ($v === '') { $v = (string)AI_MONTHLY_CALLS_DEFAULT; }
+        if (!ctype_digit($v) || (int)$v > 1000000) {
+            json_err('Aylık çağrı tavanı 0 ile 1.000.000 arasında bir tam sayı olmalı (0 = sınırsız).', 400);
+        }
+        $save['ai_monthly_calls'] = (string)(int)$v;
+    }
+
     // Birim fiyatlar (boş bırakılabilir; fiyat sabitlenmez)
     foreach (['price_in' => 'ai_price_in', 'price_out' => 'ai_price_out'] as $in => $key) {
         if (!ai_api_has($in)) { continue; }
@@ -145,6 +172,7 @@ api_register('ai.save_settings', function () {
         'provider'   => ai_provider(),
         'model'      => ai_model(),
         'key_masked' => ai_api_key_masked(),
+        'budget'     => ai_budget_status(),
     ];
 }, ['perm' => 'ai.configure', 'methods' => ['POST']]);
 
@@ -279,7 +307,8 @@ api_register('ai.logs', function () {
     $summary = ai_logs_summary(30);
     $summary['cost'] = ai_estimated_cost($summary['tokens_in'], $summary['tokens_out']);
 
-    return ['items' => $items, 'total' => ai_logs_count(), 'page' => $page, 'summary' => $summary];
+    return ['items' => $items, 'total' => ai_logs_count(), 'page' => $page,
+            'summary' => $summary, 'budget' => ai_budget_status()];
 }, ['perm' => 'ai.use', 'methods' => ['POST']]);
 
 // ============================================================ editör yardımcıları

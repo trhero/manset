@@ -322,3 +322,105 @@ details.duzeltme summary{cursor:pointer;font-size:13px;letter-spacing:.09em;text
 .oge-kategori{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box}
 .oge-govde,.oge-ust{min-width:0}
 .oge-ust{flex-wrap:wrap}
+
+/* ============================================================================
+   1.1 — mobil menü · canlı arama önerisi · paylaş · kaydet · ödeme duvarı
+   Dergi dili: kutu yerine ince çizgi, küçük kapitel etiketler, bol boşluk.
+   ============================================================================ */
+
+picture{display:block}
+
+/* ---------------------------------------------------------------- mobil menü */
+.menu-dugme{
+  display:none;background:transparent;color:var(--renk-soluk);border:0;padding:4px 0;
+  font:inherit;font-size:13px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;
+  border-bottom:1px solid var(--renk-cizgi);cursor:pointer;border-radius:0;
+}
+.menu-dugme[aria-expanded="true"]{color:var(--renk-metin);border-bottom-color:var(--renk-vurgu)}
+
+/* ------------------------------------------------------- canlı arama önerisi */
+.ara{position:relative}
+.arama-oneri{
+  position:absolute;top:calc(100% + 8px);right:0;min-width:280px;max-width:min(92vw,380px);
+  background:var(--renk-yuzey);border:1px solid var(--renk-cizgi);
+  box-shadow:0 10px 30px rgba(0,0,0,.12);list-style:none;margin:0;padding:5px;
+  z-index:60;max-height:340px;overflow:auto;text-align:left;
+}
+.arama-oneri li a{display:block;padding:9px 11px;font-size:15px;line-height:1.35;color:var(--renk-metin)}
+.arama-oneri li a:hover,.arama-oneri li.secili a{background:var(--renk-zemin);text-decoration:none}
+.arama-oneri .oneri-bos{padding:10px 11px;color:var(--renk-soluk);font-size:14px}
+
+/* ---------------------------------------------------------------- paylaş */
+.paylas{
+  display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:22px 0;
+  padding:12px 0;border-top:1px solid var(--renk-cizgi);border-bottom:1px solid var(--renk-cizgi);
+}
+.paylas-etiket{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--renk-soluk)}
+.paylas-dugme{
+  background:transparent;border:0;border-radius:0;padding:0;color:var(--renk-soluk);
+  font:inherit;font-size:13px;letter-spacing:.05em;font-weight:600;cursor:pointer;
+  border-bottom:1px solid transparent;
+}
+.paylas-dugme:hover{color:var(--renk-vurgu);border-bottom-color:var(--renk-vurgu);text-decoration:none;opacity:1}
+.paylas-sonuc{font-size:12px;color:var(--renk-vurgu);margin-left:auto}
+
+/* ------------------------------------------------------ başlık satırı + kaydet */
+.baslik-satiri{display:flex;gap:18px;align-items:flex-start;justify-content:space-between}
+.baslik-satiri h1{flex:1;min-width:0}
+.kaydet-dugme{
+  flex:0 0 auto;margin-top:8px;background:transparent;color:var(--renk-soluk);
+  border:1px solid var(--renk-cizgi);border-radius:99px;padding:6px 16px;
+  font:inherit;font-size:12px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;cursor:pointer;
+}
+.kaydet-dugme:hover{border-color:var(--renk-vurgu);color:var(--renk-vurgu);opacity:1}
+.kaydet-dugme[disabled]{opacity:.5;cursor:progress}
+.kaydet-dugme.kayitli{background:var(--renk-vurgu);border-color:var(--renk-vurgu);color:#fff}
+.kaydet-dugme.kayitli .kaydet-metin{font-size:0}
+.kaydet-dugme.kayitli .kaydet-metin::after{content:"Kaydedildi";font-size:12px;letter-spacing:.1em}
+
+.okuma-suresi::before{content:"~ "}
+.yorum-kimlik{margin:-4px 0 14px}
+.yorum-giris a{border-bottom:1px solid var(--renk-vurgu);color:var(--renk-metin)}
+
+/* ---------------------------------------------------------------- ödeme duvarı */
+/* Dönüşüm kutusu: akış genişliğinde, üstte kesilen metne yumuşak geçiş. */
+.icerik-kilit{
+  position:relative;max-width:var(--akis);margin:34px auto 10px;
+  padding:34px 30px 30px;text-align:center;
+  background:var(--renk-yuzey);border:1px solid var(--renk-cizgi);
+  border-top:3px solid var(--renk-vurgu);border-radius:var(--kose);
+}
+.icerik-kilit::before{
+  content:"";position:absolute;left:0;right:0;top:-88px;height:88px;pointer-events:none;
+  background:linear-gradient(180deg,rgba(251,251,250,0),var(--renk-zemin));
+}
+body.karanlik .icerik-kilit::before{background:linear-gradient(180deg,rgba(17,20,23,0),var(--renk-zemin))}
+.icerik-kilit h3{
+  font-family:var(--yazi-baslik);font-size:26px;margin:0 0 10px;letter-spacing:-.02em;
+}
+.icerik-kilit p{margin:0;color:var(--renk-soluk);font-size:16px}
+.icerik-kilit .kilit-eylem{
+  display:flex;gap:12px;justify-content:center;flex-wrap:wrap;
+  margin:24px 0 0;padding-top:22px;border-top:1px solid var(--renk-cizgi);
+}
+.icerik-kilit .dugme{padding:11px 26px;font-size:14px;letter-spacing:.06em}
+.icerik-kilit .dugme.ghost{background:transparent;color:var(--renk-metin);border-color:var(--renk-cizgi)}
+.icerik-kilit .dugme.ghost:hover{border-color:var(--renk-metin);opacity:1}
+.icerik-kilit[data-kilit="premium"]{border-top-color:#b8860b}
+.icerik-kilit[data-kilit="premium"] h3::after{
+  content:"Abonelere özel";display:block;margin-top:10px;
+  font-family:var(--yazi-govde);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#b8860b;
+}
+
+@media(max-width:640px){
+  .menu-dugme{display:block}
+  /* Menü listesi mobilde düğmeyle açılır; kapalıyken yer kaplamaz. */
+  .menu ul#anaMenu{display:none;width:100%;flex-direction:column;gap:0;order:3}
+  .menu ul#anaMenu.acik{display:flex}
+  .menu ul#anaMenu li{border-top:1px solid var(--renk-cizgi)}
+  .menu ul#anaMenu a{display:block;padding:11px 0}
+  .baslik-satiri{flex-wrap:wrap}
+  .icerik-kilit{padding:26px 20px 24px}
+  .icerik-kilit .kilit-eylem .dugme{flex:1 1 100%}
+  .paylas-sonuc{margin-left:0;width:100%}
+}

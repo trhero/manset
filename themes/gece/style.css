@@ -356,3 +356,112 @@ body.neon .hata-kod{text-shadow:0 0 28px color-mix(in srgb,var(--renk-neon) 55%,
 .kart-kategori{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box}
 .kart-govde{min-width:0}
 .kart-sirali .kart-kategori,.kart-sirali .kart-baslik{max-width:calc(100% - 30px)}
+
+/* ============================================================================
+   1.1 — mobil menü · canlı arama önerisi · paylaş · kaydet · ödeme duvarı
+   Gece dili: koyu yüzey, mono etiketler, neon çerçeve ve parıltı.
+   ============================================================================ */
+
+picture{display:block}
+
+/* ---------------------------------------------------------------- mobil menü */
+.menu-dugme{
+  display:none;flex-direction:column;justify-content:center;gap:5px;
+  width:42px;height:38px;padding:0 9px;background:transparent;
+  border:1px solid var(--renk-cizgi);border-radius:var(--kose);cursor:pointer;
+}
+.menu-dugme span{display:block;height:2px;background:var(--renk-metin);border-radius:2px}
+.menu-dugme[aria-expanded="true"]{border-color:var(--renk-neon)}
+.menu-dugme[aria-expanded="true"] span{background:var(--renk-neon)}
+body.neon .menu-dugme[aria-expanded="true"]{box-shadow:0 0 14px -4px var(--renk-neon)}
+
+/* ------------------------------------------------------- canlı arama önerisi */
+.arama{position:relative}
+.arama-oneri{
+  position:absolute;top:calc(100% + 6px);left:0;right:0;min-width:260px;
+  background:var(--renk-yuzey);border:1px solid var(--renk-cizgi);border-radius:var(--kose);
+  box-shadow:0 14px 34px rgba(0,0,0,.5);list-style:none;margin:0;padding:4px;
+  z-index:60;max-height:340px;overflow:auto;
+}
+body.neon .arama-oneri{border-color:color-mix(in srgb,var(--renk-neon) 40%,var(--renk-cizgi))}
+.arama-oneri li a{display:block;padding:9px 11px;border-radius:4px;font-size:14px;line-height:1.35}
+.arama-oneri li a:hover,.arama-oneri li.secili a{background:rgba(255,255,255,.07);color:var(--renk-neon);text-decoration:none}
+body.aydinlik .arama-oneri li a:hover,body.aydinlik .arama-oneri li.secili a{background:var(--renk-zemin)}
+.arama-oneri .oneri-bos{padding:10px 11px;color:var(--renk-soluk);font-size:14px}
+
+/* ---------------------------------------------------------------- paylaş */
+.paylas{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:16px 0}
+.paylas-etiket{color:var(--renk-soluk);letter-spacing:.14em}
+.paylas-dugme{
+  font:inherit;font-size:13px;font-weight:600;padding:6px 14px;cursor:pointer;
+  border:1px solid var(--renk-cizgi);border-radius:99px;
+  background:var(--renk-yuzey);color:var(--renk-metin);display:inline-block;
+}
+.paylas-dugme:hover{
+  border-color:var(--renk-neon);color:var(--renk-neon);background:var(--renk-yuzey);text-decoration:none;
+}
+body.neon .paylas-dugme:hover{box-shadow:0 0 14px -5px var(--renk-neon)}
+.paylas-sonuc{color:var(--renk-vurgu);letter-spacing:.04em}
+
+/* ------------------------------------------------------ başlık satırı + kaydet */
+.baslik-satiri{display:flex;gap:16px;align-items:flex-start;justify-content:space-between}
+.baslik-satiri h1{flex:1;min-width:0}
+.kaydet-dugme{
+  flex:0 0 auto;margin-top:6px;padding:7px 15px;cursor:pointer;font:inherit;
+  font-family:var(--yazi-mono);font-size:12px;letter-spacing:.1em;
+  background:transparent;color:var(--renk-soluk);
+  border:1px solid var(--renk-cizgi);border-radius:99px;
+}
+.kaydet-dugme:hover{border-color:var(--renk-neon);color:var(--renk-neon);background:transparent}
+.kaydet-dugme[disabled]{opacity:.5;cursor:progress}
+.kaydet-dugme.kayitli{background:var(--renk-neon);border-color:var(--renk-neon);color:#0e1116}
+.kaydet-dugme.kayitli .kaydet-metin{font-size:0}
+.kaydet-dugme.kayitli .kaydet-metin::after{content:"KAYITLI";font-size:12px;letter-spacing:.1em}
+body.neon .kaydet-dugme.kayitli{box-shadow:0 0 18px -6px var(--renk-neon)}
+
+.okuma-suresi::before{content:"⏱ "}
+.yorum-kimlik{margin:-4px 0 14px}
+.yorum-giris a{color:var(--renk-neon)}
+
+/* ---------------------------------------------------------------- ödeme duvarı */
+/* Dönüşüm kutusu: koyu zeminde neon çerçeveli panel, üstte metin sönümlemesi. */
+.icerik-kilit{
+  position:relative;margin:30px 0 10px;padding:32px 28px 28px;text-align:center;
+  background:var(--renk-yuzey);border:1px solid var(--renk-cizgi);
+  border-top:2px solid var(--renk-neon);border-radius:var(--kose);
+}
+body.neon .icerik-kilit{box-shadow:0 -2px 34px -14px var(--renk-neon),0 10px 30px rgba(0,0,0,.35)}
+.icerik-kilit::before{
+  content:"";position:absolute;left:0;right:0;top:-80px;height:80px;pointer-events:none;
+  background:linear-gradient(180deg,transparent,var(--renk-zemin));
+}
+.icerik-kilit h3{font-size:24px;margin:0 0 10px;letter-spacing:-.02em}
+.icerik-kilit h3::before{
+  content:"KİLİTLİ";display:block;margin-bottom:12px;
+  font-family:var(--yazi-mono);font-size:11px;font-weight:400;letter-spacing:.22em;
+  color:var(--renk-neon);
+}
+.icerik-kilit p{margin:0;color:var(--renk-soluk);font-size:15px}
+.icerik-kilit .kilit-eylem{display:flex;gap:11px;justify-content:center;flex-wrap:wrap;margin:22px 0 0}
+.icerik-kilit .dugme{padding:11px 24px;font-size:14px}
+.icerik-kilit .dugme.ghost{border-color:var(--renk-cizgi);color:var(--renk-soluk)}
+.icerik-kilit .dugme.ghost:hover{border-color:var(--renk-vurgu);background:transparent;color:var(--renk-vurgu)}
+.icerik-kilit[data-kilit="premium"]{border-top-color:#e8b923}
+.icerik-kilit[data-kilit="premium"] h3::before{content:"ABONELERE ÖZEL";color:#e8b923}
+.icerik-kilit[data-kilit="premium"] .dugme{border-color:#e8b923;color:#e8b923}
+.icerik-kilit[data-kilit="premium"] .dugme:hover{background:#e8b923;color:#0e1116}
+.icerik-kilit[data-kilit="premium"] .dugme.ghost{border-color:var(--renk-cizgi);color:var(--renk-soluk)}
+
+@media(max-width:900px){
+  .menu-dugme{display:flex}
+  /* Menü mobilde hamburgerle açılır; kapalıyken yer kaplamaz. */
+  .ana-menu{display:none}
+  .ana-menu.acik{display:block}
+  .ana-menu ul{flex-direction:column}
+  .ana-menu a{border-bottom:1px solid var(--renk-cizgi)}
+}
+@media(max-width:640px){
+  .baslik-satiri{flex-wrap:wrap}
+  .icerik-kilit{padding:26px 18px 24px}
+  .icerik-kilit .kilit-eylem .dugme{flex:1 1 100%}
+}

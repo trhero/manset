@@ -56,6 +56,9 @@ if ($tab === 'havuz') {
 
 $statusTones = ['new' => 'bilgi', 'queued' => 'uyari', 'processed' => 'olumlu', 'skipped' => 'notr'];
 $cronNeverRan = (setting('cron_last_run', '') === '');
+// Geri çekilme sütunları (göç 013) yoksa aralık/beklemede arayüzü gösterilmez.
+$backoffVar = function_exists('rss_has_backoff_columns') ? rss_has_backoff_columns() : false;
+$simdiZaman = now();
 ?>
 
 <div class="sayfa-basligi">
@@ -79,6 +82,13 @@ $cronNeverRan = (setting('cron_last_run', '') === '');
   <div class="sayac"><div class="deger"><?= (int)$stats['kuyrukta'] ?></div><div class="etiket">Kuyrukta</div></div>
   <div class="sayac"><div class="deger"><?= (int)$stats['bugun'] ?></div><div class="etiket">Bugün çekilen</div></div>
 </div>
+
+<?php if ($backoffVar && (int)arr($stats, 'beklemede', 0) > 0): ?>
+  <div class="uyari bilgi">
+    <?= (int)$stats['beklemede'] ?> kaynak beklemede: hata aldıkları için bir süre atlanıyorlar.
+    Pasifleştirilmediler; sıradaki denemede kendiliğinden toparlanabilirler.
+  </div>
+<?php endif; ?>
 
 <nav class="sekmeler">
   <a href="<?= esc(admin_url('rss', ['sekme' => 'kaynaklar'])) ?>" class="<?= $tab === 'kaynaklar' ? 'etkin' : '' ?>">Kaynaklar</a>
@@ -121,9 +131,16 @@ $cronNeverRan = (setting('cron_last_run', '') === '');
               <td class="dar"><?= (int)$s['auto_publish'] === 1 ? admin_badge('açık', 'olumlu') : admin_badge('kapalı', 'notr') ?></td>
               <td class="dar"><?= (int)$s['ai_rewrite'] === 1 ? admin_badge('yeniden yaz', 'ai') : admin_badge('—', 'notr') ?></td>
               <td class="dar">
+                <?php
+                  $sonraki = $backoffVar ? trim((string)($s['next_check_at'] ?? '')) : '';
+                  $bekliyor = ((int)$s['active'] === 1 && $sonraki !== '' && $sonraki > $simdiZaman);
+                ?>
                 <?= (int)$s['active'] === 1 ? admin_badge('aktif', 'olumlu') : admin_badge('pasif', 'notr') ?>
+                <?php if ($bekliyor): ?>
+                  <span class="rozet bilgi" title="Bir sonraki kontrol: <?= esc($sonraki) ?>">beklemede</span>
+                <?php endif; ?>
                 <?php if ((int)$s['error_count'] > 0): ?>
-                  <span class="rozet uyari" title="Üst üste hata sayısı"><?= (int)$s['error_count'] ?> hata</span>
+                  <span class="rozet uyari" title="Üst üste hata sayısı<?= $bekliyor ? ' — kaynak pasifleştirilmez, geri çekilerek yeniden denenir' : '' ?>"><?= (int)$s['error_count'] ?> hata</span>
                 <?php endif; ?>
               </td>
               <td class="dar"><span class="kucuk soluk"><?= esc($s['last_fetch_at'] ? tr_ago($s['last_fetch_at']) : 'hiç') ?></span></td>
@@ -160,11 +177,21 @@ $cronNeverRan = (setting('cron_last_run', '') === '');
         <span class="form-yardim">Kaydetmeden önce “Adresi sına” ile beslemenin okunabildiğini doğrulamanız önerilir.</span>
       </div>
 
-      <div class="form-alan">
-        <label for="rss_cat">Hedef kategori</label>
-        <select id="rss_cat" name="category_id">
-          <?= admin_options($categories, $editSource ? (int)$editSource['category_id'] : 0, 'Kategorisiz') ?>
-        </select>
+      <div class="form-satir">
+        <div class="form-alan">
+          <label for="rss_cat">Hedef kategori</label>
+          <select id="rss_cat" name="category_id">
+            <?= admin_options($categories, $editSource ? (int)$editSource['category_id'] : 0, 'Kategorisiz') ?>
+          </select>
+        </div>
+        <div class="form-alan">
+          <label for="rss_interval">Kontrol aralığı (dk)</label>
+          <input type="number" id="rss_interval" name="interval_min" min="0" max="10080" step="1"
+                 value="<?= (int)($editSource ? ($editSource['interval_min'] ?? 0) : 0) ?>"
+                 <?= $backoffVar ? '' : 'disabled' ?>>
+          <span class="form-yardim">0 = varsayılan (<?= (int)RSS_DEFAULT_INTERVAL ?> dk).
+            <?= $backoffVar ? 'Bu süre dolmadan kaynak yeniden çekilmez.' : 'Bu alan için veritabanı güncellemesi gerekiyor.' ?></span>
+        </div>
       </div>
 
       <div class="form-alan">
@@ -193,7 +220,14 @@ $cronNeverRan = (setting('cron_last_run', '') === '');
           <input type="checkbox" name="active" value="1" <?= (!$editSource || (int)$editSource['active'] === 1) ? 'checked' : '' ?>>
           <span class="kaydirak"></span><span>Kaynak aktif</span>
         </label>
-        <span class="form-yardim">Üst üste <?= (int)RSS_MAX_ERRORS ?> hata alan kaynak kendiliğinden pasifleşir.</span>
+        <span class="form-yardim">
+          <?php if ($backoffVar): ?>
+            Hata alan kaynak pasifleştirilmez; giderek seyrelen aralıklarla (5 dk → 15 dk → 1 sa → 6 sa → 24 sa)
+            yeniden denenir. İlk başarılı çekimde sayaç sıfırlanır. Bu anahtar yalnız sizin elinizdedir.
+          <?php else: ?>
+            Üst üste <?= (int)RSS_MAX_ERRORS ?> hata alan kaynak kendiliğinden pasifleşir.
+          <?php endif; ?>
+        </span>
       </div>
 
       <div class="dugme-grup">
@@ -314,6 +348,7 @@ $cronNeverRan = (setting('cron_last_run', '') === '');
       name: d.name || '',
       url: d.url || '',
       category_id: parseInt(d.category_id, 10) || 0,
+      interval_min: parseInt(d.interval_min, 10) || 0,
       auto_publish: d.auto_publish ? 1 : 0,
       ai_rewrite: d.ai_rewrite ? 1 : 0,
       active: d.active ? 1 : 0

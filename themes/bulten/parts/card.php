@@ -9,16 +9,25 @@ if (empty($post)) { return; }
 $boyut = isset($boyut) ? (string)$boyut : 'orta';
 $buyukGorsel = theme_setting('buyuk_gorsel', '1') === '1';
 $kapak = ($boyut === 'kapak' || $boyut === 'buyuk') && $buyukGorsel;
-$img = post_image($post, $kapak ? 'large' : ($boyut === 'kucuk' || $boyut === 'liste' ? 'thumb' : 'medium'));
+$gorselBoy = $kapak ? 'large' : ($boyut === 'kucuk' || $boyut === 'liste' ? 'thumb' : 'medium');
+$img = post_image($post, $gorselBoy);
 $srcset = post_image_srcset($post);
+$webp = $img ? post_image_webp_srcset($post) : '';
 $sira = isset($sira) ? (int)$sira : 0;
+// LCP adayı: kapak öğesi ya da akışın ilk sıradaki maddesi ekranın üstünde açılır.
+$onceki = ($kapak || $boyut === 'buyuk' || $sira === 1);
 ?>
 <article class="oge oge-<?= esc($boyut) ?><?= $kapak ? ' oge-kapak' : '' ?>">
   <?php if ($img && $boyut !== 'liste'): ?>
     <a class="oge-gorsel" href="<?= esc(url_post($post)) ?>" tabindex="-1" aria-hidden="true">
-      <img src="<?= esc($img) ?>"
-           <?= $srcset ? 'srcset="' . esc($srcset) . '" sizes="(max-width:760px) 100vw, 720px"' : '' ?>
-           alt="" loading="lazy" decoding="async">
+      <picture>
+        <?php if ($webp !== ''): ?>
+          <source type="image/webp" srcset="<?= esc($webp) ?>" sizes="(max-width:760px) 100vw, 720px">
+        <?php endif; ?>
+        <img src="<?= esc($img) ?>"
+             <?= $srcset ? 'srcset="' . esc($srcset) . '" sizes="(max-width:760px) 100vw, 720px"' : '' ?>
+             alt="" <?= post_image_attrs($post, $gorselBoy, $onceki) ?>>
+      </picture>
     </a>
   <?php endif; ?>
 

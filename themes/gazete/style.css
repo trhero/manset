@@ -297,6 +297,58 @@ body.kart-border .haber{border:1px solid var(--renk-cizgi)}
 .paylas-dugme:hover{background:var(--renk-vurgu);color:#fff;border-color:var(--renk-vurgu);text-decoration:none}
 .paylas-sonuc{font-size:13px;color:#1f9254;font-weight:600}
 
+/* ============================================================ başlık satırı + kaydet */
+picture{display:block}
+.baslik-satiri{display:flex;gap:14px;align-items:flex-start;justify-content:space-between}
+.baslik-satiri h1{flex:1;min-width:0}
+.kaydet-dugme{
+  flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;margin-top:4px;
+  background:var(--renk-yuzey);color:var(--renk-metin);border:1px solid var(--renk-cizgi);
+  border-radius:20px;padding:7px 15px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;
+}
+.kaydet-dugme:hover{border-color:var(--renk-vurgu);color:var(--renk-vurgu)}
+.kaydet-dugme[disabled]{opacity:.55;cursor:progress}
+.kaydet-dugme.kayitli{background:var(--renk-vurgu);border-color:var(--renk-vurgu);color:#fff}
+.kaydet-dugme.kayitli .kaydet-metin{font-size:0}
+.kaydet-dugme.kayitli .kaydet-metin::after{content:"Kaydedildi";font-size:13px}
+
+/* ============================================================ ödeme duvarı */
+/* Dönüşüm kutusu: teaser'ın hemen altında, okuma akışını bilerek keser. */
+.icerik-kilit{
+  position:relative;margin:26px 0 8px;padding:30px 28px 26px;text-align:center;
+  background:linear-gradient(180deg,#fff 0%,#f7f9fb 100%);
+  border:1px solid var(--renk-cizgi);border-top:4px solid var(--renk-ana);
+  border-radius:var(--kose);box-shadow:0 6px 22px rgba(0,0,0,.07);
+}
+/* Kesilen metinden kutuya yumuşak geçiş */
+.icerik-kilit::before{
+  content:"";position:absolute;left:0;right:0;top:-70px;height:70px;pointer-events:none;
+  background:linear-gradient(180deg,rgba(255,255,255,0),var(--renk-yuzey));
+}
+.icerik-kilit h3{
+  font-size:23px;margin:0 0 8px;letter-spacing:-.015em;
+}
+.icerik-kilit h3::before{
+  content:"🔒";display:block;font-size:26px;margin-bottom:10px;line-height:1;
+}
+.icerik-kilit p{margin:0 0 6px;color:var(--renk-soluk);font-size:15.5px}
+.icerik-kilit .kilit-eylem{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:18px 0 0}
+.icerik-kilit .dugme{padding:11px 24px;font-size:15px;border-radius:var(--kose)}
+.icerik-kilit .dugme.ghost{
+  background:transparent;color:var(--renk-ana);border:1px solid var(--renk-ana);
+}
+.icerik-kilit .dugme.ghost:hover{background:var(--renk-ana);color:#fff;filter:none}
+.icerik-kilit[data-kilit="premium"]{border-top-color:var(--renk-vurgu)}
+.icerik-kilit[data-kilit="premium"] h3::before{content:"★"}
+.icerik-kilit[data-kilit="premium"] .dugme{background:var(--renk-vurgu)}
+.icerik-kilit[data-kilit="premium"] .dugme.ghost{background:transparent;color:var(--renk-vurgu);border-color:var(--renk-vurgu)}
+.icerik-kilit[data-kilit="premium"] .dugme.ghost:hover{background:var(--renk-vurgu);color:#fff}
+@media(max-width:480px){
+  .icerik-kilit{padding:24px 18px}
+  .icerik-kilit .kilit-eylem .dugme{flex:1 1 100%}
+  .baslik-satiri{flex-wrap:wrap}
+}
+
 /* ============================================================ formlar */
 .satir{display:flex;gap:14px;flex-wrap:wrap}
 .satir>label{flex:1;min-width:170px}

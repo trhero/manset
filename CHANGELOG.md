@@ -4,6 +4,137 @@ Bu proje [Anlamsal Sürümleme](https://semver.org/lang/tr/) kurallarını izler
 
 ## [Yayımlanmadı]
 
+## [1.1.0] — "Sağlam zemin"
+
+Bu sürümde **yeni ürün özelliği yok**. 1.0'ın tamamlanmamış kenarları kapatıldı,
+bir sonraki yükseltmenin güvenli olması için altyapı kuruldu ve otomasyon
+dayanıklı hâle getirildi. Yol haritası: `GELISTIRME_PLANI.md`.
+
+> **Yükseltme notu.** Yeni sürümün dosyalarını FTP ile üstüne attıktan sonra
+> panele bir kez girin: şema kendiliğinden güncellenir (öncesinde yedek alınır).
+> Elle bir şey yapmanız gerekmez. Kendi teması olanlar için: tema sözleşmesi
+> genişledi (aşağıya bakın).
+
+### Yükseltme ve dayanıklılık
+- **Şema göçü artık kendiliğinden uygulanıyor.** `settings.installed_version`
+  damgası eklendi; panele (ya da cron'a) ilk girişte sürüm farkı görülürse
+  yedek alınır, göçler uygulanır, önbellek temizlenir ve damga güncellenir.
+  1.0'da göçler yalnız kurulumda ve panelde bir düğmeyle çalışıyordu — zip'i
+  üstüne atan yönetici o düğmeyi bilmezse site yarı çalışıyordu.
+  Göç **yalnız yetkili bağlamda** tetiklenir; anonim ön yüz isteğinde şema
+  değiştirmek yarış koşulu yaratır ve ilk ziyaretçiye saniyeler süren bir
+  istek olarak yansırdı.
+- **Cron kilidi ve görev geçmişi.** `flock` ile aynı anda iki cron çalışması
+  engellendi (RSS aynı haberi iki kez alabiliyordu). Her görev `cron_runs`
+  tablosuna yazılıyor: başlangıç, süre, işlenen öge, sonuç.
+- **Görev bütçesi.** Uzun görevler süre dolunca kaldığı yeri bırakıp çıkıyor,
+  sonraki turda devam ediyor (`cron_task_budget_sec`, varsayılan 25 sn).
+- **"Poor man's cron".** Gerçek cron kuramayan paylaşımlı hostingler için:
+  `cron_web_tick` açıksa görevler bir panel isteğinin **sonunda** tetiklenir.
+  Ön yüzde çalışmaz — anonim istek süresi ve sayfa önbelleği korunur.
+- **AI geri çekilmesi.** Sağlayıcı geçici hata verdiğinde (5xx, zaman aşımı)
+  iş artık `failed` olmuyor; üstel bekleme ile yeniden deneniyor. Yalnız kalıcı
+  hatalarda (geçersiz istek, hatalı anahtar) başarısız sayılıyor.
+- **AI aylık bütçe tavanı** (`ai_monthly_budget`, 0 = sınırsız). Tavan dolunca
+  yeni çağrı yapılmaz, kuyruk durur, iş kaybolmaz; panelde harcama göstergesi.
+- **RSS geri çekilmesi.** Kaynak 5 hatada kalıcı olarak pasifleşiyordu; geçici
+  bir kesinti kaynağı sonsuza dek öldürüyordu. Artık "beklemede" durumuna
+  geçiyor (5 dk → 24 sa) ve kendiliğinden yeniden deneniyor. Kaynak başına
+  kontrol aralığı eklendi.
+- **Sağlık ucu** `public.health` (anahtarlı, varsayılan kapalı): sürüm, bekleyen
+  göç, cron yaşı, disk, veritabanı boyutu, bekleyen kuyruklar.
+- **Çöp kutusu.** Haber silme artık geri alınabilir (`posts.deleted_at`).
+  Kalıcı silme ayrı bir yetki ister.
+
+### Performans
+- **LCP görselleri artık tembel yüklenmiyor.** Manşetin ilk kartı ve haber
+  sayfasının ana görseli `loading="eager"` + `fetchpriority="high"`; sayfanın
+  en üstündeki görseli tembel yüklemek Largest Contentful Paint'i doğrudan
+  cezalandırıyordu ve bu Google Haberler sıralamasında bir sinyaldir.
+- **WebP artık gerçekten sunuluyor.** Varyantlar 1.0'da üretiliyor ama hiçbir
+  yerde kullanılmıyordu — diskte duran ölü dosyalardı. `<picture>` ile sunuluyor.
+- Görsellere `width`/`height` verildi (düzen kayması azaldı).
+- `.htaccess`: sıkıştırma (mod_deflate), statik dosyalara uzun önbellek
+  (mod_expires/mod_headers), `Vary: Accept-Encoding`. HTML bilinçli olarak
+  kapsam dışı — sayfa önbelleğinin başlıklarını PHP yönetiyor.
+
+### Temalar
+- **Beş temada özellik eşitlendi.** `bulten`, `gece` ve `yerel` temalarında
+  `theme.js` hiç yokmuş: mobil menü, canlı arama önerisi ve panoya kopyalama
+  tamamen eksikti. Paylaş düğmeleri, okuma süresi ve oturum farkındalı yorum
+  formu da eklendi.
+- **Ödeme duvarı kutusu artık stilli.** `.icerik-kilit` hiçbir temada
+  tanımlanmamıştı; abonelik daveti biçimsiz görünüyordu.
+- **"Kaydet" düğmesi çalışıyor.** Düğme hiçbir temada basılmıyordu ve ön yüzde
+  üyelik modülü yüklenmediği için `member_current()` hiç tanımlı değildi —
+  üyeliğin görünür tek getirisi ölüydü.
+- **Düzeltme metni üç temada hiç basılmıyordu** (`bulten`, `gece`, `yerel`).
+  Basın Kanunu m.14 düzeltme ve cevabın ilgili içerikle yayımlanmasını ister;
+  bu temaları seçen yayıncı yükümlülüğünü yerine getirdiğini sanıyordu.
+
+### Roller ve yetki
+- **Üç ölü izin kapıya bağlandı.** `posts.edit_wire`, `posts.seo` ve
+  `posts.takedown` katalogda tanımlıydı ama hiçbir kapıda okunmuyordu:
+  Otomasyon Editörü kendi iş kolunun çıktısını açamıyor, SEO Editörü üstveri
+  düzenleyemiyordu. Artık SEO Editörü "üstveri kipi"nde yalnız SEO alanlarını
+  yazabiliyor; gövde ve başlık girdisi sunucuda yok sayılıyor.
+- **Panel sayfa kapısı fail-closed oldu.** İzin artık menüden bağımsız bir
+  haritadan okunuyor; haritada olmayan sayfaya erişim yok. Eskiden menüde
+  kayıtlı olmayan bir sayfa için izin hiç sorulmuyordu.
+- `probe unused_perms` sondası: katalogda tanımlı ama hiçbir kapıda
+  kullanılmayan izinleri listeler. Böyle bir izin sessizce ölüdür — yayıncı
+  açar, hiçbir şey değişmez.
+
+### Muhabir ekranı
+- **Çevrimdışı yedek haber metnini kaybediyordu.** Yerel yedek geri yüklenirken
+  yalnız başlık ve spot yazılıyordu; sahada şebeke koparsa en kıymetli alan
+  gidiyordu. Gövde, görsel ve kategori de geri yükleniyor.
+- "Düzenle" bağlantısı ölüydü (`?duzenle=` parametresi hiç okunmuyordu).
+- Çoklu fotoğraf desteği; çevrimdışı yedek tek anahtardan kuyruğa çevrildi
+  (ikinci haber birincinin yedeğini siliyordu).
+
+### Düzeltme ve cevap (Basın Kanunu m.14)
+- `handled_by` artık yazılıyor: talebi kimin işlediği kayıtlı.
+- Başvurana tek alıcılık, işlemsel bilgilendirme e-postası (toplu gönderim yok).
+- Yasal süre görünürlüğü: `corrections_deadline_hours` ayarıyla gecikmiş
+  talepler panelde işaretleniyor. Süre koda gömülü değildir; **yayıncı
+  yürürlükteki güncel yönetmeliği teyit etmelidir.**
+- Editoryal "Güncelleme notu" türü — yasal düzeltmeden ayrı tutulur.
+
+### Kurulum
+- Gereksinim denetimi genişledi: `fileinfo`, `openssl`, mod_rewrite/SEF, PHP
+  ini değerleri, disk alanı. Her eksik madde için **paylaşımlı hostingde ne
+  yapılacağı** yazılı.
+- Alt dizine kurulumda `RewriteBase` kendiliğinden hesaplanıyor.
+- nginx ve IIS için kopyalanabilir SEF yönergesi.
+- HTTPS'e yönlendirme seçeneği.
+
+### Test ve süreklilik
+- **Birim test koşucusu** (`tests/unit/run.php`) — Composer'sız, saf PHP.
+  52 test, 333 iddia; `sanitize_html`, `roles_can`, `slugify`, `rate_limit`
+  ve önbellek yardımcılarını kapsıyor.
+- **GitHub Actions**: PHP 8.0/8.2/8.4 × SQLite matrisi ve ayrı bir MySQL işi.
+- `tests/e2e.sh --driver=mysql` desteği (MySQL yolu ilk kez CI'da koşuyor).
+
+### Düzeltilen hatalar
+- `slugify()` büyük harfli Nordik/İspanyol harflerini sessizce siliyordu
+  (`Øslo` → `slo`). Türkçe davranışı değişmedi.
+- `roles_cache_reset()` asıl izin önbelleğini temizlemiyordu; uzun ömürlü
+  süreçlerde (cron/CLI) bayat sonuç veriyordu.
+- `uploads/.htaccess` içindeki koşulsuz `php_flag` satırı kaldırıldı: PHP'nin
+  FPM/CGI olarak çalıştığı sunucularda dizinin tamamını 500'e düşürüyordu.
+  Koruma azalmadı — asıl koruyucu direktifler SAPI'den bağımsızdır.
+- Besleme kısayolları (`/rss.xml`, `/sitemap.xml`) 302 yerine 301 döndürüyor.
+
+### Tema sözleşmesi (kendi teması olanlar için)
+Aşağıdakiler tema sözleşmesine eklendi; kendi temanızı güncellemeniz önerilir:
+- Sayfanın LCP adayı görseli `post_image_attrs($post, $size, true)` ile
+  **eager** basılmalıdır.
+- WebP `post_image_webp_srcset()` ile `<picture><source>` olarak sunulmalıdır.
+- Düzeltme bloğu (`part('duzeltme-haber')`) haber sayfasında **basılmak
+  zorundadır** — yasal yükümlülük.
+- `post_update_notes_html()` düzeltme bloğunun üstünde basılmalıdır.
+
 ### Arayüz düzeltmeleri
 - **Panel anahtar (toggle) düğmeleri metnin üstüne biniyordu.** `.form-alan > label`
   kuralı (özgüllük 0,1,1) `.anahtar`ı (0,1,0) eziyor ve etiketi blok yapıyordu;

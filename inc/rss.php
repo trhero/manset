@@ -12,6 +12,8 @@
 
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/sanitize.php';
+// schema_has_column(): göç 013'ün sütunları var mı diye bakarız (geriye dönük uyum).
+require_once __DIR__ . '/schema.php';
 
 // ---------------------------------------------------------------- sabitler
 if (!defined('RSS_MAX_BYTES'))        { define('RSS_MAX_BYTES', 3145728); }   // 3 MB indirme tavanı
@@ -21,6 +23,49 @@ if (!defined('RSS_MAX_REDIRECTS'))    { define('RSS_MAX_REDIRECTS', 2); }     //
 if (!defined('RSS_MAX_ERRORS'))       { define('RSS_MAX_ERRORS', 5); }        // bu kadar üst üste hatada kaynak kapatılır
 if (!defined('RSS_SOURCES_PER_TICK')) { define('RSS_SOURCES_PER_TICK', 5); }  // cron turu başına kaynak sayısı
 if (!defined('RSS_MAX_ITEMS'))        { define('RSS_MAX_ITEMS', 100); }       // tek beslemeden alınacak en çok öge
+if (!defined('RSS_DEFAULT_INTERVAL')) { define('RSS_DEFAULT_INTERVAL', 10); }  // kaynak başına varsayılan çekim aralığı (dk)
+
+/**
+ * GERİ ÇEKİLME MERDİVENİ (1.1-07).
+ *
+ * NEDEN: 1.0'da 5 hata alan kaynak `active = 0` yapılıyordu ve bir daha HİÇ
+ * denenmiyordu. Kaynağın sunucusu on dakika çökse, ajansın beslemesi kalıcı
+ * olarak ölüyordu; yayıncı bunu ancak günler sonra fark ediyordu.
+ *
+ * Yerine "beklemede" davranışı: hata sayısına göre bir sonraki denemenin saati
+ * (`rss_sources.next_check_at`) ileri atılır. 5 hatadan sonra 24 saatte bir
+ * denenmeye devam eder; başarılı ilk çekimde sayaç sıfırlanır ve kaynak normal
+ * aralığına döner. `active` sütunu YALNIZ yayıncının elle kapatmasına ayrılır.
+ */
+function rss_backoff_steps() {
+    return [5, 15, 60, 360, 1440];   // dakika: 5dk → 15dk → 1sa → 6sa → 24sa
+}
+
+/** Hata sayısına göre bekleme süresi (dakika). */
+function rss_backoff_minutes($errorCount) {
+    $steps = rss_backoff_steps();
+    $i = max(1, (int)$errorCount) - 1;
+    if ($i >= count($steps)) { $i = count($steps) - 1; }
+    return (int)$steps[$i];
+}
+
+/** Geri çekilme sütunları (göç 013) var mı? */
+function rss_has_backoff_columns() {
+    static $var = null;
+    if ($var === null) {
+        $var = function_exists('schema_has_column')
+            && schema_has_column('rss_sources', 'next_check_at')
+            && schema_has_column('rss_sources', 'interval_min');
+    }
+    return $var;
+}
+
+/** Kaynağın çekim aralığı (dk). 0/boş ise varsayılan kullanılır. */
+function rss_source_interval($source) {
+    $v = is_array($source) ? (int)arr($source, 'interval_min', 0) : (int)$source;
+    if ($v <= 0) { return RSS_DEFAULT_INTERVAL; }
+    return max(1, min(10080, $v));   // 1 dk – 7 gün
+}
 
 // XML ad alanları (önek yerine URI kullanılır — beslemeler önekleri serbestçe seçer)
 if (!defined('RSS_NS_CONTENT')) { define('RSS_NS_CONTENT', 'http://purl.org/rss/1.0/modules/content/'); }
@@ -635,14 +680,14 @@ function rss_fetch_source(array $source, $dryRun = false) {
 
     if ($url === '') {
         $out['error'] = 'Besleme adresi boş.';
-        if (!$dryRun && $sourceId > 0) { rss_source_disable_if_failing($sourceId, $out['error']); }
+        if (!$dryRun && $sourceId > 0) { rss_source_mark_error($sourceId, $out['error']); }
         return $out;
     }
 
     $http = rss_http_get($url, RSS_TOTAL_TIMEOUT);
     if (!$http['ok']) {
         $out['error'] = $http['error'] !== '' ? $http['error'] : 'Adres yanıt vermedi';
-        if (!$dryRun && $sourceId > 0) { rss_source_disable_if_failing($sourceId, $out['error']); }
+        if (!$dryRun && $sourceId > 0) { rss_source_mark_error($sourceId, $out['error']); }
         return $out;
     }
 
@@ -650,7 +695,7 @@ function rss_fetch_source(array $source, $dryRun = false) {
     $parsed = rss_parse($body);
     if (!$parsed['ok']) {
         $out['error'] = $parsed['error'] !== '' ? $parsed['error'] : 'Beslemede öge bulunamadı.';
-        if (!$dryRun && $sourceId > 0) { rss_source_disable_if_failing($sourceId, $out['error']); }
+        if (!$dryRun && $sourceId > 0) { rss_source_mark_error($sourceId, $out['error']); }
         return $out;
     }
 
@@ -695,18 +740,39 @@ function rss_fetch_source(array $source, $dryRun = false) {
     $out['yeni'] = count($out['yeni_idler']);
     $out['ok'] = true;
 
-    // Başarılı çekim: hata sayacı sıfırlanır
+    // Başarılı çekim: hata sayacı sıfırlanır, kaynak normal aralığına döner
     if ($sourceId > 0) {
-        db_update('rss_sources', ['error_count' => 0, 'fetch_error' => '', 'last_fetch_at' => $now],
-            'id = :id', [':id' => $sourceId]);
+        rss_source_mark_ok($sourceId, $source, $now);
     }
     return $out;
 }
 
 /**
- * Hata sayacını artırır; RSS_MAX_ERRORS (5) kez üst üste hata veren kaynak pasifleştirilir.
+ * Başarılı çekim: hata sayacı sıfırlanır ve bir sonraki kontrol saati yazılır.
  */
-function rss_source_disable_if_failing($sourceId, $error) {
+function rss_source_mark_ok($sourceId, $source = [], $now = '') {
+    $sourceId = (int)$sourceId;
+    if ($sourceId <= 0) { return; }
+    if ($now === '') { $now = now(); }
+    $data = ['error_count' => 0, 'fetch_error' => '', 'last_fetch_at' => $now];
+    if (rss_has_backoff_columns()) {
+        $data['next_check_at'] = date('Y-m-d H:i:s', time() + rss_source_interval($source) * 60);
+    }
+    db_update('rss_sources', $data, 'id = :id', [':id' => $sourceId]);
+}
+
+/**
+ * Hatalı çekimi işaretler ve kaynağı geri çekilme merdivenine bindirir.
+ *
+ * `active` DEĞİŞTİRİLMEZ: kaynağı yalnız yayıncı elle pasifleştirir. Kaynak
+ * 5 hatadan sonra da 24 saatte bir denenmeye devam eder; kesinti geçtiğinde
+ * kendiliğinden toparlanır.
+ *
+ * GERİYE DÖNÜK UYUM: göç 013 uygulanmadıysa (next_check_at yok) beklemenin
+ * saklanacağı yer olmadığından 1.0 davranışına düşülür — RSS_MAX_ERRORS
+ * hatadan sonra kaynak pasifleştirilir.
+ */
+function rss_source_mark_error($sourceId, $error) {
     $sourceId = (int)$sourceId;
     if ($sourceId <= 0) { return; }
     $count = (int)qv('SELECT error_count FROM rss_sources WHERE id = :i', [':i' => $sourceId], 0) + 1;
@@ -715,11 +781,25 @@ function rss_source_disable_if_failing($sourceId, $error) {
         'fetch_error'   => sanitize_line($error, 500),
         'last_fetch_at' => now(),
     ];
-    if ($count >= RSS_MAX_ERRORS) {
+
+    if (rss_has_backoff_columns()) {
+        $dk = rss_backoff_minutes($count);
+        $data['next_check_at'] = date('Y-m-d H:i:s', time() + $dk * 60);
+        if ($count === RSS_MAX_ERRORS) {
+            log_error('RSS kaynağı beklemeye alındı (' . $count . ' hata, ' . $dk . ' dk sonra yeniden denenecek)',
+                'kaynak=' . $sourceId . ' hata=' . $error);
+        }
+    } elseif ($count >= RSS_MAX_ERRORS) {
         $data['active'] = 0;
         log_error('RSS kaynağı pasifleştirildi (' . $count . ' hata)', 'kaynak=' . $sourceId . ' hata=' . $error);
     }
+
     db_update('rss_sources', $data, 'id = :id', [':id' => $sourceId]);
+}
+
+/** 1.0 adı — geriye dönük uyum için korunuyor (artık pasifleştirmez, geri çekilir). */
+function rss_source_disable_if_failing($sourceId, $error) {
+    rss_source_mark_error($sourceId, $error);
 }
 
 // ================================================================ havuz
@@ -761,9 +841,19 @@ function rss_pool_count(array $filters = []) {
     return (int)qv('SELECT COUNT(*) FROM rss_items i' . $where, $params, 0);
 }
 
+/** Geri çekilme nedeniyle bekleyen (kontrol saati gelmemiş) kaynak sayısı. */
+function rss_waiting_count() {
+    if (!rss_has_backoff_columns()) { return 0; }
+    try {
+        return (int)qv('SELECT COUNT(*) FROM rss_sources WHERE active = 1 AND next_check_at > :n',
+            [':n' => now()], 0);
+    } catch (Throwable $e) { return 0; }
+}
+
 /** Panel sayaçları. */
 function rss_stats() {
     return [
+        'beklemede'      => rss_waiting_count(),
         'aktif_kaynak'   => (int)qv('SELECT COUNT(*) FROM rss_sources WHERE active = 1', [], 0),
         'toplam_kaynak'  => (int)qv('SELECT COUNT(*) FROM rss_sources', [], 0),
         'bekleyen'       => (int)qv('SELECT COUNT(*) FROM rss_items WHERE status = \'new\'', [], 0),
@@ -827,23 +917,38 @@ function rss_item_to_draft($itemId) {
     $spotSource = trim((string)$item['summary']) !== '' ? (string)$item['summary'] : strip_tags($body);
     $spot = excerpt($spotSource, 300);
 
+    /*
+     * NEDEN (denetim turu 3, B13): `posts.edit_wire` YETKİ kararı eskiden
+     * `source_url` alanına bakıyordu; o alan panelde elle doldurulabilen bir
+     * KULLANICI GİRDİSİ. Bir yazar kendi haberine adres yazarak onu "ajans
+     * haberi" ilan edebiliyordu. Yetki kararı yalnız SİSTEMİN yazdığı alana
+     * dayanmalı: `is_wire` bayrağını YALNIZ içe aktarıcılar yazar.
+     *
+     * GERİYE DÖNÜK UYUM: göç 014 uygulanmamış kurulumda sütun yoktur; alan
+     * db_insert'e hiç eklenmez, çekim çökmek yerine eski davranışı sürdürür.
+     */
+    $alanlar = [
+        'title'        => $title,
+        'slug'         => unique_slug('posts', $title),
+        'spot'         => $spot,
+        'body'         => $body,
+        'image'        => (string)$item['image'],   // mutlak URL; post_image() http ile başlayanı olduğu gibi döndürür
+        'category_id'  => $src ? (int)$src['category_id'] : 0,
+        'author_id'    => rss_default_author_id(),
+        'status'       => 'draft',
+        'type'         => 'haber',
+        'source_name'  => $sourceName,
+        'source_url'   => $link,
+        'ai_generated' => 0,
+        'created_at'   => now(),
+        'updated_at'   => now(),
+    ];
+    if (function_exists('schema_has_column') && schema_has_column('posts', 'is_wire')) {
+        $alanlar['is_wire'] = 1;
+    }
+
     try {
-        $postId = db_insert('posts', [
-            'title'        => $title,
-            'slug'         => unique_slug('posts', $title),
-            'spot'         => $spot,
-            'body'         => $body,
-            'image'        => (string)$item['image'],   // mutlak URL; post_image() http ile başlayanı olduğu gibi döndürür
-            'category_id'  => $src ? (int)$src['category_id'] : 0,
-            'author_id'    => rss_default_author_id(),
-            'status'       => 'draft',
-            'type'         => 'haber',
-            'source_name'  => $sourceName,
-            'source_url'   => $link,
-            'ai_generated' => 0,
-            'created_at'   => now(),
-            'updated_at'   => now(),
-        ]);
+        $postId = db_insert('posts', $alanlar);
     } catch (Throwable $e) {
         log_error('RSS taslak üretimi: ' . $e->getMessage(), 'oge=' . $itemId);
         $out['error'] = 'Taslak oluşturulamadı.';
@@ -860,29 +965,79 @@ function rss_item_to_draft($itemId) {
 // ================================================================ cron
 
 /**
+ * 1.0'da otomatik pasifleştirilmiş kaynakları BİR KEZ beklemeye alır.
+ *
+ * Yükseltmeden önce `active = 0` yapılmış kaynaklar yeni geri çekilme
+ * düzeninde bir daha hiç denenmezdi. Bu kurtarma yalnız otomatik kapatma
+ * imzası taşıyanlara (error_count >= RSS_MAX_ERRORS) dokunur ve tek sefer
+ * çalışır (settings.rss_backoff_migrated), yayıncının elle kapattığı
+ * kaynakları diriltmez.
+ */
+function rss_revive_auto_disabled() {
+    if (!rss_has_backoff_columns()) { return 0; }
+    if (setting('rss_backoff_migrated', '0') === '1') { return 0; }
+    $n = 0;
+    try {
+        $n = q('UPDATE rss_sources SET active = 1, next_check_at = :t
+                WHERE active = 0 AND error_count >= :e',
+            [':t' => date('Y-m-d H:i:s', time() + 60), ':e' => RSS_MAX_ERRORS])->rowCount();
+        setting_set('rss_backoff_migrated', '1');
+        if ($n > 0) { log_error('RSS: ' . $n . ' otomatik pasifleştirilmiş kaynak beklemeye alındı'); }
+    } catch (Throwable $e) {
+        log_error('rss_revive_auto_disabled: ' . $e->getMessage());
+    }
+    return $n;
+}
+
+/**
  * cron.php her turda çağırır. Tur başına en çok RSS_SOURCES_PER_TICK kaynak,
  * `last_fetch_at` en eski olandan başlayarak işlenir.
+ *
+ * 1.1: kontrol saati gelmemiş kaynaklar (`next_check_at > now`) atlanır —
+ * hem kaynak başına aralık (`interval_min`) hem de hata geri çekilmesi bu
+ * sütun üzerinden yürür. Cron görev bütçesi dolarsa döngü nazikçe durur ve
+ * kalan kaynaklar bir sonraki tura kalır.
  *
  * @return string "3 kaynak, 12 yeni öge, 1 hata"
  */
 function rss_cron_tick() {
-    $sources = qa('SELECT * FROM rss_sources WHERE active = 1
-                   ORDER BY COALESCE(last_fetch_at, \'\') ASC, id ASC
-                   LIMIT ' . RSS_SOURCES_PER_TICK);
+    rss_revive_auto_disabled();
+
+    $now = now();
+    if (rss_has_backoff_columns()) {
+        $sources = qa('SELECT * FROM rss_sources
+                       WHERE active = 1 AND (next_check_at IS NULL OR next_check_at = \'\' OR next_check_at <= :n)
+                       ORDER BY COALESCE(next_check_at, \'\') ASC, COALESCE(last_fetch_at, \'\') ASC, id ASC
+                       LIMIT ' . RSS_SOURCES_PER_TICK, [':n' => $now]);
+        $bekleyen = (int)qv('SELECT COUNT(*) FROM rss_sources
+                             WHERE active = 1 AND next_check_at > :n', [':n' => $now], 0);
+    } else {
+        $sources = qa('SELECT * FROM rss_sources WHERE active = 1
+                       ORDER BY COALESCE(last_fetch_at, \'\') ASC, id ASC
+                       LIMIT ' . RSS_SOURCES_PER_TICK);
+        $bekleyen = 0;
+    }
 
     $srcCount = 0;
     $newTotal = 0;
     $errCount = 0;
     $published = 0;
+    $kalan = 0;
 
     foreach ($sources as $s) {
+        // Görev bütçesi: bir kaynak çekimi en kötü ihtimalle RSS_TOTAL_TIMEOUT
+        // sürer; o kadar süre kalmadıysa hiç başlamayız.
+        if (function_exists('cron_over_budget') && cron_over_budget(RSS_TOTAL_TIMEOUT)) {
+            $kalan = count($sources) - $srcCount;
+            break;
+        }
         $srcCount++;
         try {
             $r = rss_fetch_source($s, false);
         } catch (Throwable $e) {
             $errCount++;
             log_error('RSS çekim istisnası: ' . $e->getMessage(), 'kaynak=' . (int)$s['id']);
-            rss_source_disable_if_failing((int)$s['id'], 'Beklenmeyen hata: ' . $e->getMessage());
+            rss_source_mark_error((int)$s['id'], 'Beklenmeyen hata: ' . $e->getMessage());
             continue;
         }
         if (!$r['ok']) { $errCount++; continue; }
@@ -913,5 +1068,7 @@ function rss_cron_tick() {
     if ($published > 0 && function_exists('cache_flush')) { cache_flush(); }
 
     return $srcCount . ' kaynak, ' . $newTotal . ' yeni öge, ' . $errCount . ' hata'
-         . ($published > 0 ? ', ' . $published . ' yayımlandı' : '');
+         . ($published > 0 ? ', ' . $published . ' yayımlandı' : '')
+         . ($kalan > 0 ? ', süre doldu — ' . $kalan . ' kaynak sonraki tura kaldı' : '')
+         . ($bekleyen > 0 ? ', ' . $bekleyen . ' kaynak beklemede' : '');
 }

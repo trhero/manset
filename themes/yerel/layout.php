@@ -31,5 +31,6 @@ $sidebarPos = theme_setting('sidebar_position', 'right');
 <?php part('footer'); ?>
 <?= cookie_notice_html() ?>
 <script src="<?= esc(url_asset('site.js')) ?>?v=<?= esc(MANSET_VERSION) ?>" defer></script>
+<script src="<?= esc(theme_url('theme.js')) ?>?v=<?= esc(MANSET_VERSION) ?>" defer></script>
 </body>
 </html>

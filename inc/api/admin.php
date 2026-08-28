@@ -3,7 +3,8 @@
  * Manşet — panel içerik API uçları (Ajan-2).
  *
  * Kayıtlı uçlar:
- *   posts.list · posts.get · posts.save · posts.delete · posts.bulk · posts.slug_check
+ *   posts.list · posts.get · posts.save · posts.delete · posts.restore · posts.purge
+ *   posts.bulk · posts.slug_check · posts.takedown
  *   categories.save · categories.delete · categories.reorder
  *   pages.save · pages.delete
  *   comments.moderate · comments.bulk
@@ -17,6 +18,8 @@
  *   · Slug unique_slug() ile üretilir.
  *   · posts.edit_any yoksa yalnız kendi kayıtları (IDOR koruması).
  *   · posts.publish yoksa istenen durum ne olursa olsun 'pending' yazılır.
+ *   · 1.1 — posts.delete artık YUMUŞAK silme (çöp kutusu): kayıt durur, deleted_at damgalanır.
+ *     Kalıcı silme yalnız posts.purge ucundan ve yalnız admin rolüyle yapılır.
  */
 if (!defined('MANSET_BOOTSTRAPPED')) { exit; }
 
@@ -62,11 +65,89 @@ function api_admin_image_value($value) {
     $v = trim((string)$value);
     if ($v === '') { return ''; }
     if (preg_match('#^https?://#i', $v)) {
+        // GÜVENLİK (denetim turu 3, B06): uzak görsel adresi YALNIZ tam
+        // düzenleme yetkisi olana açıktır. Üstveri kipindeki bir SEO editörü
+        // HER haberin öne çıkan görselini üçüncü taraf bir adrese çevirebiliyordu;
+        // o görsel manşette basıldığı sürece her ziyaretçinin IP'si, tarayıcı
+        // bilgisi ve Referer'ı o sunucuya gider ve içerik istendiği an
+        // değiştirilebilir. Kendi medya kütüphanesindeki dosyalar serbesttir.
+        $uzakIzinli = function_exists('current_user')
+            && ($cu = current_user()) !== null
+            && (can($cu, 'posts.edit_any') || can($cu, 'posts.create'));
+        if (!$uzakIzinli) { return ''; }
         return sanitize_is_safe_url($v, false) ? sanitize_line($v, 255) : '';
     }
     $v = ltrim(str_replace('\\', '/', $v), '/');
     if (strpos($v, '..') !== false) { return ''; }
     return preg_match('#^[A-Za-z0-9/_\-\.]{1,255}$#', $v) ? $v : '';
+}
+
+/**
+ * Haber ajans/YZ kaynaklı mı? (1.1-02)
+ * Otomasyon editörünün iş kolu budur: AI ve RSS taslaklarının yazarı daima ilk
+ * yönetici olarak yazılır (ai_first_admin_id / inc/rss.php), bu yüzden sahiplik
+ * denetimi wire_editor'ü kendi çıktısından bile dışarıda bırakıyordu.
+ */
+function api_admin_is_wire_post($post) {
+    // GUVENLIK (denetim turu 3, B13): bu bir YETKI KARARIDIR, dolayisiyla yalniz
+    // SISTEMIN yazdigi alanlara dayanmalidir. `source_url` panelde ELLE
+    // doldurulabilen bir kullanici girdisidir: bir yazar kendi haberine herhangi
+    // bir adres yazarak onu "ajans haberi" ilan edip Otomasyon Editoru'nun
+    // erisimine acabiliyordu.
+    //
+    // `is_wire` (goc 014) yalniz ice aktaricilar tarafindan yazilir; panel formu
+    // bu alani hic gondermez. `ai_generated` de sistem sahiplidir.
+    if ((int)arr($post, 'is_wire', 0) === 1) { return true; }
+    if ((int)arr($post, 'ai_generated', 0) === 1) { return true; }
+
+    // Goc 014 uygulanmamis kurulumda eski sezgisel kurala dusulur (geriye donuk
+    // uyum). Goc uygulandiktan sonra bu dal calismaz.
+    if (function_exists('schema_has_column') && schema_has_column('posts', 'is_wire')) {
+        return false;
+    }
+    return trim((string)arr($post, 'source_url', '')) !== '';
+}
+
+/**
+ * Üstveri kipi (1.1-02): kullanıcı haberin metnine dokunamaz, yalnız üstveriyi düzenler.
+ * posts.seo var ama posts.edit_any / posts.edit_own yoksa bu kip devrededir.
+ */
+function api_admin_metadata_only(array $user) {
+    return can($user, 'posts.seo')
+        && !can($user, 'posts.edit_any')
+        && !can($user, 'posts.edit_own');
+}
+
+/** Üstveri kipinde yazılmasına izin verilen alanlar. */
+function api_admin_metadata_fields() {
+    return ['seo_title', 'seo_desc', 'tags', 'slug', 'image'];
+}
+
+/**
+ * Yıkıcı işlemleri denetim kaydına yazar (denetim turu 3, B05).
+ *
+ * NEDEN: manşet sırası değişikliği loglanıyordu ama haberin çöpe atılması,
+ * geri alınması, KALICI silinmesi (yorum ve düzeltme geçmişiyle birlikte)
+ * ve yayından kaldırılması hiçbir iz bırakmıyordu. Çok yazarlı bir haber
+ * odasında "bu haberi kim kaldırdı?" sorusunun cevabı olmalıdır; m.14
+ * düzeltme süreçlerinde de gerekebilir.
+ *
+ * Tablo göç 012'de gelir; yoksa sessizce atlanır (geriye dönük uyum).
+ * Kayıt YAZILAMAZSA asıl işlem ENGELLENMEZ — denetim kaydı bir güvence
+ * katmanıdır, hizmet kesici değil.
+ */
+function api_admin_audit(array $user, $action, $target, $detail = '') {
+    try {
+        if (!function_exists('schema_has_table') || !schema_has_table('audit_log')) { return; }
+        db_insert('audit_log', [
+            'user_id'    => (int)arr($user, 'id', 0),
+            'action'     => sanitize_line((string)$action, 60),
+            'target'     => sanitize_line((string)$target, 120),
+            'detail'     => sanitize_line((string)$detail, 500),
+            'ip'         => client_ip(),
+            'created_at' => now(),
+        ]);
+    } catch (Throwable $e) { log_error('denetim kaydı: ' . $e->getMessage()); }
 }
 
 /**
@@ -77,7 +158,18 @@ function api_admin_load_post($id, array $user) {
     $id = (int)$id;
     $post = q1('SELECT * FROM posts WHERE id = :i', [':i' => $id]);
     if (!$post) { json_err('Haber bulunamadı.', 404); }
-    if (!can($user, 'posts.edit_any') && (int)$post['author_id'] !== (int)$user['id']) {
+    // GÜVENLİK (denetim turu 3, B01 — KRİTİK): burada ÇIPLAK can('posts.seo')
+    // sorulamaz. Üstveri kipinin tanımı api_admin_metadata_only()'dir:
+    // "posts.seo VAR **ve** edit_any/edit_own YOK". Çıplak sorulunca
+    // `posts.edit_own` + `posts.seo` olan bir kullanıcı hem bu sahiplik
+    // kapısını aşıyor hem de üstveri kipine DÜŞMÜYOR (metadata_only false),
+    // yani posts.save onu tam yetkili editör sayıyordu. Rol matrisinde en dar
+    // görünen "Yalnız üstveri (SEO)" izni, fiilen "her haberi düzenle"ye
+    // dönüşüyordu. Kapı ile kip AYNI koşulu kullanmak ZORUNDA.
+    if (!can($user, 'posts.edit_any')
+        && (int)$post['author_id'] !== (int)$user['id']
+        && !(can($user, 'posts.edit_wire') && api_admin_is_wire_post($post))
+        && !api_admin_metadata_only($user)) {
         json_err('Yalnız kendi haberlerinizi düzenleyebilirsiniz.', 403);
     }
 
@@ -87,8 +179,11 @@ function api_admin_load_post($id, array $user) {
     // muhabir api.php?a=posts.save ile yayındaki haberini hem yeniden yazabiliyor
     // hem status='draft' yapıp siteden düşürebiliyordu. USER_TYPES_PLAN §5'te
     // bunun sunucu tarafında da reddedileceği yazılıydı; kapı burada.
+    // posts.seo bu kapıdan muaftır: üstveri kipi metne/duruma DOKUNAMAZ (bkz. posts.save),
+    // yalnız SEO alanlarını yazar. SEO editörünün işi zaten yayındaki haberlerdir.
     if ((string)arr($post, 'status', '') === 'published'
         && !can($user, 'posts.edit_any')
+        && !api_admin_metadata_only($user)
         && !can($user, 'posts.edit_own_published')) {
         json_err('Yayımlanmış haberi değiştiremezsiniz. Düzeltme için editörünüze başvurun.', 403);
     }
@@ -96,7 +191,54 @@ function api_admin_load_post($id, array $user) {
     return $post;
 }
 
-/** Yorum sayısını bozmadan haberin bağımlı kayıtlarını temizler. */
+/**
+ * Çöp kutusu için kaydı yükler — IDOR denetimi yapar ama "yayımlanmış" kapısını
+ * uygulamaz. Silinmiş bir haberi geri almak metnini düzenlemek değildir; posts.delete
+ * izni olan kendi haberini geri alabilmelidir (yayımlanmışken silinmiş olabilir).
+ */
+function api_admin_load_post_for_trash($id, array $user, $yayinKapisi = true) {
+    $id = (int)$id;
+    $post = q1('SELECT * FROM posts WHERE id = :i', [':i' => $id]);
+    if (!$post) { json_err('Haber bulunamadı.', 404); }
+    if (!can($user, 'posts.edit_any') && (int)$post['author_id'] !== (int)$user['id']) {
+        json_err('Yalnız kendi haberlerinizi silebilirsiniz.', 403);
+    }
+
+    // GÜVENLİK (denetim turu 3, B04): çöp yolu, tur 2'de kapatılan
+    // "yayımlanmış haberi değiştirme" kapısını atlatıyordu. Denetçi kanıtladı:
+    // posts.save ile 403 alan bir muhabir, posts.delete + posts.restore ile
+    // kendi yayımlanmış haberini istediği an siteden düşürüp geri koyabiliyordu
+    // — yani yayımlama yetkisi olmadan fiilî bir yayın/kaldırma anahtarı.
+    // Yayımlanmış bir haberi çöpe atmak da bir YAYINDAN KALDIRMA işlemidir.
+    if ($yayinKapisi
+        && (string)arr($post, 'status', '') === 'published'
+        && !can($user, 'posts.edit_any')
+        && !can($user, 'posts.publish')
+        && !can($user, 'posts.takedown')
+        && !can($user, 'posts.edit_own_published')) {
+        json_err('Yayımlanmış haberi kaldırma yetkiniz yok. Editörünüze başvurun.', 403);
+    }
+
+    return $post;
+}
+
+/**
+ * Yumuşak silme (1.1-09): kayıt silinmez, deleted_at damgalanır.
+ * Bağımlı kayıtlara (yorum, düzeltme) DOKUNULMAZ — geri alınca haber eksiksiz döner.
+ * Ön yüz koruması çekirdekte: published_where() zaten deleted_at = '' arar.
+ * Sütun yoksa (göç 013 uygulanmamışsa) eski davranışa düşülür.
+ */
+function api_admin_soft_delete_post($id) {
+    $id = (int)$id;
+    if (!function_exists('published_supports_trash') || !published_supports_trash()) {
+        api_admin_purge_post($id);
+        return;
+    }
+    q('UPDATE posts SET deleted_at = :now, updated_at = :now2 WHERE id = :i',
+      [':now' => now(), ':now2' => now(), ':i' => $id]);
+}
+
+/** Yorum sayısını bozmadan haberin bağımlı kayıtlarını temizler (KALICI silme). */
 function api_admin_purge_post($id) {
     $id = (int)$id;
     q('DELETE FROM comments WHERE post_id = :i', [':i' => $id]);
@@ -109,7 +251,7 @@ function api_admin_purge_post($id) {
 // ============================================================ posts.list
 
 /**
- * İstek : {q?, status?, category_id?, author_id?, ai_only?:0|1, page?:int, per_page?:int}
+ * İstek : {q?, status?, category_id?, author_id?, ai_only?:0|1, trash?:0|1, page?:int, per_page?:int}
  * Yanıt : {ok:true, items:[…], total:int, page:int, per_page:int}
  */
 api_register('posts.list', function () {
@@ -137,6 +279,12 @@ api_register('posts.list', function () {
     if ($authorId > 0) { $where[] = 'p.author_id = :aid'; $p[':aid'] = $authorId; }
 
     if ((int)arr($d, 'ai_only', 0) === 1) { $where[] = 'p.ai_generated = 1'; }
+
+    // Çöp kutusu (1.1-09): varsayılan liste silinmişleri GÖSTERMEZ; trash=1 yalnız çöpü verir.
+    if (function_exists('published_supports_trash') && published_supports_trash()) {
+        $where[] = (int)arr($d, 'trash', 0) === 1 ? 'p.deleted_at <> :bos' : 'p.deleted_at = :bos';
+        $p[':bos'] = '';
+    }
 
     $q = media_like_term((string)arr($d, 'q', ''));
     if ($q !== '') {
@@ -206,8 +354,77 @@ api_register('posts.save', function () {
     $d = json_body();
     $id = (int)arr($d, 'id', 0);
 
+    // Uç izni 'posts.view'a çekildi ki üstveri kipi (posts.seo) de girebilsin — posts.seo
+    // olan rolde posts.create YOKTUR. Gerçek kapı burada, AÇIKÇA: salt okuyan bir rol
+    // (yalnız posts.view) hiçbir şey yazamaz.
+    $ustveriKipi = api_admin_metadata_only($u);
+    if (!$ustveriKipi
+        && !can($u, 'posts.create') && !can($u, 'posts.edit_any')
+        && !can($u, 'posts.edit_own') && !can($u, 'posts.edit_wire')) {
+        json_err('Haber düzenleme yetkiniz yok.', 403);
+    }
+    if ($id <= 0 && !can($u, 'posts.create')) { json_err('Haber oluşturma yetkiniz yok.', 403); }
+
     $existing = null;
     if ($id > 0) { $existing = api_admin_load_post($id, $u); }
+
+    // ---------------------------------------------------------------- üstveri kipi
+    // posts.seo var, düzenleme izni yok: YALNIZ üstveri yazılır. Metin/durum/kategori
+    // girdileri sessizce yok sayılır — hata döndürmüyoruz ki arayüz sade kalsın ve
+    // formun tamamını gönderen istemci gereksiz uyarı almasın.
+    if ($ustveriKipi) {
+        if (!$existing) { json_err('Üstveri kipinde yeni haber oluşturulamaz.', 403); }
+
+        // KISMİ GÖNDERİM VERİ KAYBETMEZ (denetim turu 3, B08).
+        // Eskiden gönderilmeyen her alan BOŞALTILIYOR, boş slug ise başlıktan
+        // YENİDEN ÜRETİLİYORDU: yalnız `seo_title` göndermek isteyen bir SEO
+        // editörü, farkında olmadan elle yazılmış slug'ı, etiketleri ve görseli
+        // siliyordu. Panel formu artık tüm alanları taşıyor ama üçüncü taraf ya da
+        // otomatik bir istemci bunu yapmak zorunda değil — kapı SUNUCUDA olmalı.
+        // Kural: yalnız İSTEKTE BULUNAN anahtarlar yazılır.
+        $ustveri = ['updated_at' => now()];
+
+        $yeniSlug = (string)$existing['slug'];
+        if (array_key_exists('slug', $d)) {
+            $slugIn = sanitize_line((string)arr($d, 'slug', ''), 200);
+            // Boş slug gönderildiğinde başlıktan yeniden üretmek, elle verilmiş
+            // adresi sessizce değiştirir ve eski adres 301 geçmişine düşer.
+            // Boş gelirse MEVCUT adres korunur.
+            if ($slugIn !== '') {
+                $yeniSlug = unique_slug('posts', $slugIn, $id);
+                if ((string)$existing['slug'] !== $yeniSlug && function_exists('seo_remember_slug')) {
+                    seo_remember_slug((int)$id, (string)$existing['slug']);
+                }
+                $ustveri['slug'] = $yeniSlug;
+            }
+        }
+        if (array_key_exists('image', $d)) {
+            $gorsel = api_admin_image_value(arr($d, 'image', ''));
+            // Geçersiz görsel değeri (ör. izinsiz uzak adres) MEVCUDU SİLMEZ.
+            if ($gorsel !== '' || trim((string)arr($d, 'image', '')) === '') {
+                $ustveri['image'] = $gorsel;
+            }
+        }
+        if (array_key_exists('tags', $d)) {
+            $ustveri['tags'] = sanitize_line(tags_to_string(arr($d, 'tags', '')), 500);
+        }
+        if (array_key_exists('seo_title', $d)) {
+            $ustveri['seo_title'] = sanitize_line((string)arr($d, 'seo_title', ''), 255);
+        }
+        if (array_key_exists('seo_desc', $d)) {
+            $ustveri['seo_desc'] = sanitize_plain((string)arr($d, 'seo_desc', ''), 500);
+        }
+        db_update('posts', $ustveri, 'id = :id', [':id' => $id]);
+        api_admin_flush();
+        return [
+            'id'           => (int)$id,
+            'slug'         => $yeniSlug,
+            'status'       => (string)$existing['status'],
+            'published_at' => (string)arr($existing, 'published_at', ''),
+            'url'          => url_post(['id' => (int)$id, 'slug' => $yeniSlug]),
+            'message'      => 'Üstveri güncellendi.',
+        ];
+    }
 
     $title = sanitize_line((string)arr($d, 'title', ''), 255);
     if ($title === '') { json_err('Başlık zorunlu.', 400); }
@@ -309,21 +526,84 @@ api_register('posts.save', function () {
         'url'          => url_post(['id' => (int)$id, 'slug' => $slug]),
         'message'      => $msg,
     ];
-}, ['perm' => 'posts.create', 'methods' => ['POST']]);
+}, ['perm' => 'posts.view', 'methods' => ['POST']]);
 
-// ============================================================ posts.delete
+// ============================================================ posts.delete (yumuşak)
 
 /**
  * İstek : {id:int}
  * Yanıt : {ok:true, id:int, message:string}
+ * Not   : Kayıt çöp kutusuna taşınır; geri almak için posts.restore.
  */
 api_register('posts.delete', function () {
     $u = api_admin_user();
     $d = json_body();
-    $post = api_admin_load_post((int)arr($d, 'id', 0), $u);
+    $post = api_admin_load_post_for_trash((int)arr($d, 'id', 0), $u);
+    api_admin_soft_delete_post((int)$post['id']);
+    api_admin_flush();
+    return ['id' => (int)$post['id'], 'message' => 'Haber çöp kutusuna taşındı.'];
+}, ['perm' => 'posts.delete', 'methods' => ['POST']]);
+
+// ============================================================ posts.restore
+
+/**
+ * İstek : {id:int}
+ * Yanıt : {ok:true, id:int, message:string}
+ * Not   : Çöp kutusundaki haberi geri alır. Durum alanına dokunulmaz —
+ *         yayındaki bir haber silinmişse geri alınca yine yayına döner.
+ */
+api_register('posts.restore', function () {
+    $u = api_admin_user();
+    $d = json_body();
+    if (!function_exists('published_supports_trash') || !published_supports_trash()) {
+        json_err('Çöp kutusu bu kurulumda etkin değil.', 400);
+    }
+    $post = api_admin_load_post_for_trash((int)arr($d, 'id', 0), $u);
+    if ((string)arr($post, 'deleted_at', '') === '') {
+        json_err('Bu haber çöp kutusunda değil.', 400);
+    }
+    q('UPDATE posts SET deleted_at = :bos, updated_at = :now WHERE id = :i',
+      [':bos' => '', ':now' => now(), ':i' => (int)$post['id']]);
+    api_admin_flush();
+    return ['id' => (int)$post['id'], 'message' => 'Haber geri alındı.'];
+}, ['perm' => 'posts.delete', 'methods' => ['POST']]);
+
+// ============================================================ posts.purge
+
+/**
+ * İstek : {id:int}
+ * Yanıt : {ok:true, id:int, message:string}
+ * Not   : KALICI silme — haber, yorumları ve düzeltmeleri geri dönüşsüz gider.
+ */
+api_register('posts.purge', function () {
+    $u = api_admin_user();
+
+    // GEREKÇE: kalıcı silme geri alınamaz ve yorum/düzeltme geçmişini de götürür.
+    // posts.delete izni artık yalnız "çöp kutusuna taşı" anlamına geliyor; editör
+    // yanlışlıkla sildiğinde geri alabilsin diye. Kaydı gerçekten yok etme kararı
+    // yalnız site sahibinin olmalı, o yüzden izin değil ROL kapısı koyuldu:
+    // can($u,'posts.delete') burada yetmez.
+    if ((string)arr($u, 'role', '') !== 'admin') {
+        json_err('Kalıcı silme yalnız yöneticiye açıktır.', 403);
+    }
+
+    $d = json_body();
+    // yayinKapisi=false: admin zaten her şeyi yapabilir, ikinci kapı gereksiz.
+    $post = api_admin_load_post_for_trash((int)arr($d, 'id', 0), $u, false);
+
+    // GÜVENLİK (denetim turu 3, B12): kalıcı silme YALNIZ çöpteki kayda uygulanır.
+    // Eskiden canlı bir haber tek istekle, çöp kutusuna hiç uğramadan, yorum ve
+    // düzeltme geçmişiyle birlikte yok edilebiliyordu. Çöp kutusunun varlık
+    // sebebi bu iki adımlı olmasıdır: önce kaldır, sonra bilinçli olarak imha et.
+    if (function_exists('published_supports_trash') && published_supports_trash()
+        && trim((string)arr($post, 'deleted_at', '')) === '') {
+        json_err('Önce çöp kutusuna taşıyın. Kalıcı silme yalnız çöpteki habere uygulanır.', 409);
+    }
+
+    api_admin_audit($u, 'posts.purge', 'post#' . (int)$post['id'], (string)arr($post, 'title', ''));
     api_admin_purge_post((int)$post['id']);
     api_admin_flush();
-    return ['id' => (int)$post['id'], 'message' => 'Haber silindi.'];
+    return ['id' => (int)$post['id'], 'message' => 'Haber kalıcı olarak silindi.'];
 }, ['perm' => 'posts.delete', 'methods' => ['POST']]);
 
 // ============================================================ posts.bulk
@@ -351,12 +631,15 @@ api_register('posts.bulk', function () {
 
     $count = 0;
     foreach ($clean as $one) {
-        $post = q1('SELECT id, author_id, status, published_at FROM posts WHERE id = :i', [':i' => $one]);
+        $post = q1('SELECT * FROM posts WHERE id = :i', [':i' => $one]);
         if (!$post) { continue; }
         if (!can($u, 'posts.edit_any') && (int)$post['author_id'] !== (int)$u['id']) { continue; }
+        // Çöptekinin durumu toplu işlemle değiştirilmez; önce geri alınmalı.
+        if ($action !== 'delete' && (string)arr($post, 'deleted_at', '') !== '') { continue; }
 
         if ($action === 'delete') {
-            api_admin_purge_post((int)$post['id']);
+            // Toplu silme de yumuşak — 200 kaydı geri dönüşsüz yok etmek felaket olur.
+            api_admin_soft_delete_post((int)$post['id']);
             $count++;
             continue;
         }
@@ -369,7 +652,8 @@ api_register('posts.bulk', function () {
     }
 
     api_admin_flush();
-    $labels = ['publish' => 'yayımlandı', 'draft' => 'taslağa alındı', 'archive' => 'arşivlendi', 'delete' => 'silindi'];
+    $labels = ['publish' => 'yayımlandı', 'draft' => 'taslağa alındı', 'archive' => 'arşivlendi',
+               'delete' => 'çöp kutusuna taşındı'];
     return ['action' => $action, 'count' => $count, 'message' => $count . ' haber ' . $labels[$action] . '.'];
 }, ['perm' => 'posts.edit_any', 'methods' => ['POST']]);
 
@@ -388,7 +672,46 @@ api_register('posts.slug_check', function () {
     $clash = q1('SELECT id FROM posts WHERE slug = :s AND id <> :i LIMIT 1', [':s' => $slug, ':i' => $id]);
     $suggestion = unique_slug('posts', $slug, $id);
     return ['slug' => $slug, 'available' => !$clash, 'suggestion' => $suggestion];
-}, ['perm' => 'posts.create', 'methods' => ['POST']]);
+    // İzin posts.view: salt okuma ve üstveri kipindeki SEO editörünün posts.create'i yok.
+}, ['perm' => 'posts.view', 'methods' => ['POST']]);
+
+// ============================================================ posts.takedown
+
+/**
+ * İstek : {id:int, reason?:string}
+ * Yanıt : {ok:true, id:int, status:string, message:string}
+ *
+ * Yayından çekme (1.1-02). posts.save üzerinden DEĞİL ayrı bir uç: bu yetki, tam
+ * düzenleme hakkı olmayan birinin (hukuk/nöbetçi) hukuki ya da acil bir durumda
+ * içeriği hızla siteden düşürebilmesi içindir. Metne dokunmaz, silmez —
+ * yalnız status = 'archived' yapar; haber panelde durur, geri yayımlanabilir.
+ */
+api_register('posts.takedown', function () {
+    $u = api_admin_user();
+    $d = json_body();
+    $id = (int)arr($d, 'id', 0);
+
+    // GÜVENLİK (denetim turu 3, B03): bu uç YIKICI bir işlemdir — haberi
+    // siteden düşürür. Eskiden ne sahiplik ne de okuma izni arıyordu; yalnız
+    // `posts.takedown` grantı verilmiş bir moderator, id sayarak tüm siteyi
+    // yayından kaldırabiliyordu. Kapı ortak yükleyiciye bağlandı: sahiplik ve
+    // görünürlük denetimi orada. Ayrıca hız sınırı ve denetim kaydı eklendi.
+    if (!can($u, 'posts.view')) { json_err('Bu işlem için yetkiniz yok.', 403); }
+    if (!rate_limit('takedown:' . (int)$u['id'], 20, 600)) {
+        json_err('Çok fazla yayından kaldırma isteği. Lütfen bekleyin.', 429);
+    }
+    $post = api_admin_load_post($id, $u);
+
+    if ((string)$post['status'] === 'archived') {
+        return ['id' => $id, 'status' => 'archived', 'message' => 'Haber zaten yayında değil.'];
+    }
+    $sebep = sanitize_line((string)arr($d, 'reason', ''), 200);
+    db_update('posts', ['status' => 'archived', 'updated_at' => now()], 'id = :id', [':id' => $id]);
+    api_admin_audit($u, 'posts.takedown', 'post#' . $id,
+        $sebep !== '' ? $sebep : (string)arr($post, 'title', ''));
+    api_admin_flush();
+    return ['id' => $id, 'status' => 'archived', 'message' => 'Haber yayından kaldırıldı.'];
+}, ['perm' => 'posts.takedown', 'methods' => ['POST']]);
 
 // ============================================================ categories.save
 
@@ -640,6 +963,10 @@ api_register('comments.bulk', function () {
 api_register('dashboard.stats', function () {
     $u = api_admin_user();
     $mine = can($u, 'posts.edit_any') ? '' : ' AND author_id = ' . (int)$u['id'];
+    // Çöp kutusundaki haber sayaçlara girmesin (1.1-09).
+    if (function_exists('published_supports_trash') && published_supports_trash()) {
+        $mine .= ' AND deleted_at = \'\'';
+    }
 
     $out = [
         'published'        => (int)qv('SELECT COUNT(*) FROM posts WHERE status = \'published\'' . $mine, [], 0),

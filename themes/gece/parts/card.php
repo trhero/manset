@@ -7,16 +7,26 @@ if (!defined('MANSET_BOOTSTRAPPED')) { exit; }
 if (empty($post)) { return; }
 
 $boyut = isset($boyut) ? (string)$boyut : 'orta';
-$img = post_image($post, $boyut === 'buyuk' ? 'large' : ($boyut === 'kucuk' || $boyut === 'liste' ? 'thumb' : 'medium'));
+$gorselBoy = $boyut === 'buyuk' ? 'large' : ($boyut === 'kucuk' || $boyut === 'liste' ? 'thumb' : 'medium');
+$img = post_image($post, $gorselBoy);
 $srcset = post_image_srcset($post);
+$webp = $img ? post_image_webp_srcset($post) : '';
 $kat = arr($post, 'category_color', '');
+$sira = isset($sira) ? (int)$sira : 0;
+// LCP adayı: büyük kart ya da sıralı listenin ilk maddesi ekranın üstünde açılır.
+$onceki = ($boyut === 'buyuk' || $sira === 1);
 ?>
 <article class="kart kart-<?= esc($boyut) ?><?= $sira > 0 ? " kart-sirali" : "" ?>"<?= $kat !== '' ? ' style="--kat:' . esc($kat) . '"' : '' ?>>
   <?php if ($img && $boyut !== 'liste'): ?>
     <a class="kart-gorsel" href="<?= esc(url_post($post)) ?>" tabindex="-1" aria-hidden="true">
-      <img src="<?= esc($img) ?>"
-           <?= $srcset ? 'srcset="' . esc($srcset) . '" sizes="(max-width:760px) 100vw, 420px"' : '' ?>
-           alt="" loading="lazy" decoding="async">
+      <picture>
+        <?php if ($webp !== ''): ?>
+          <source type="image/webp" srcset="<?= esc($webp) ?>" sizes="(max-width:760px) 100vw, 420px">
+        <?php endif; ?>
+        <img src="<?= esc($img) ?>"
+             <?= $srcset ? 'srcset="' . esc($srcset) . '" sizes="(max-width:760px) 100vw, 420px"' : '' ?>
+             alt="" <?= post_image_attrs($post, $gorselBoy, $onceki) ?>>
+      </picture>
       <?php if (arr($post, 'type', '') === 'video'): ?><span class="oynat" aria-hidden="true">▶</span><?php endif; ?>
     </a>
   <?php endif; ?>

@@ -14,8 +14,14 @@ $srcset    = post_image_srcset($post);
 $etiketler = post_tags($post);
 $govde     = post_body_html($post);
 $kaynakGovdede = (strpos($govde, 'class="kaynak"') !== false);
-$sure      = post_reading_time($post);
-$sureGoster = theme_setting('show_reading_time', '1') === '1';
+/* NEDEN (denetim 3 · onyuz B07): post_reading_time() okuma süresini TAM gövdeden
+   hesaplıyor. Kilitli (ödeme duvarı arkasındaki) haberde bu, anonim ziyaretçiye duvarın
+   arkasındaki metnin UZUNLUĞUNU sızdırıyor — metin değil ama üstveri de duvarın içindedir.
+   post_is_locked() (inc/roles.php) oturum AÇMAZ, bu yüzden §3.1 ve sayfa önbelleği bozulmaz.
+   Kilitliyse süre hiç hesaplanmaz ve rozet hiç basılmaz. */
+$kilitliHaber = function_exists('post_is_locked') && post_is_locked($post);
+$sure = $kilitliHaber ? 0 : post_reading_time($post);
+$sureGoster = !$kilitliHaber && theme_setting('show_reading_time', '1') === '1';
 $guncel    = post_updated_visible($post);
 
 $yol = [['label' => 'Anasayfa', 'url' => url()]];
@@ -37,7 +43,20 @@ $yol[] = ['label' => (string)$post['title'], 'url' => url_post($post)];
         <?php endif; ?>
       </p>
 
-      <h1 itemprop="headline"><?= esc($post['title']) ?></h1>
+      <div class="baslik-satiri">
+        <h1 itemprop="headline"><?= esc($post['title']) ?></h1>
+        <?php /* Üyelik modülü kuruluysa "Kaydet"; JS assets/uye.js içindedir. */ ?>
+        <?php /* onyuz B03: düğme herkese basılır (anonim HTML değişmez, önbellek bozulmaz);
+         data-uye işaretiyle uye.js anonim tıklamada HİÇBİR ağ isteği yapmadan girişe gönderir.
+         member_current() oturum AÇMAZ (current_user_if_session), §3.1 korunur. */ ?>
+        <?php if (function_exists('member_current')): ?>
+          <?php $uyeOturum = member_current(); ?>
+          <button type="button" class="kaydet-dugme" data-kaydet="<?= (int)$post['id'] ?>" data-uye="<?= $uyeOturum ? '1' : '0' ?>"
+                  data-giris="<?= esc(url('uye/giris')) ?>" aria-pressed="false" title="Haberi kaydet">
+            <span class="kaydet-metin">Kes ve sakla</span>
+          </button>
+        <?php endif; ?>
+      </div>
 
       <?php if (!empty($post['spot'])): ?>
         <p class="spot" itemprop="description"><?= esc($post['spot']) ?></p>
@@ -74,8 +93,14 @@ $yol[] = ['label' => (string)$post['title'], 'url' => url_post($post)];
 
     <?php if ($img): ?>
       <figure class="haber-gorsel">
-        <img src="<?= esc($img) ?>"<?= $srcset ? ' srcset="' . esc($srcset) . '" sizes="(max-width:900px) 100vw, 760px"' : '' ?>
-             alt="<?= esc($post['title']) ?>" itemprop="image" decoding="async" loading="lazy">
+        <picture>
+          <?php $webp = post_image_webp_srcset($post); if ($webp !== ''): ?>
+            <source type="image/webp" srcset="<?= esc($webp) ?>" sizes="(max-width:900px) 100vw, 760px">
+          <?php endif; ?>
+          <?php /* LCP adayı: sayfanın en büyük görseli, öncelikli yüklenir. */ ?>
+          <img src="<?= esc($img) ?>"<?= $srcset ? ' srcset="' . esc($srcset) . '" sizes="(max-width:900px) 100vw, 760px"' : '' ?>
+               alt="<?= esc($post['title']) ?>" itemprop="image" <?= post_image_attrs($post, 'large', true) ?>>
+        </picture>
       </figure>
     <?php endif; ?>
 
@@ -102,6 +127,8 @@ $yol[] = ['label' => (string)$post['title'], 'url' => url_post($post)];
     <?php part('paylas', ['post' => $post]); ?>
 
     <?php /* Basın Kanunu m.14 — yayımlanmış düzeltme/cevap metinleri */ ?>
+    <?php /* Güncelleme notları EDİTORYALDİR ve düzeltme/tekzipten AYRIDIR; yasal blok her zaman altta kalır. Not yoksa boş dize döner. */ ?>
+    <?= function_exists('post_update_notes_html') ? post_update_notes_html((int)$post['id']) : '' ?>
     <?php part('duzeltme-haber', ['post' => $post]); ?>
 
     <?php if (setting('corrections_enabled', '1') === '1'): ?>
@@ -139,3 +166,7 @@ $yol[] = ['label' => (string)$post['title'], 'url' => url_post($post)];
 
   <?php part('sidebar'); ?>
 </div>
+<?php /* "Kes ve sakla" düğmesinin davranışı; yalnız düğme basıldıysa yüklenir. */ ?>
+<?php if (function_exists('member_current')): ?>
+<script src="<?= esc(url_asset('uye.js')) ?>?v=<?= esc(MANSET_VERSION) ?>" defer></script>
+<?php endif; ?>

@@ -23,6 +23,13 @@ if (is_file(__DIR__ . '/inc/seo.php'))     { require_once __DIR__ . '/inc/seo.ph
 if (is_file(__DIR__ . '/inc/cache.php'))   { require_once __DIR__ . '/inc/cache.php'; }
 if (is_file(__DIR__ . '/inc/widgets.php')) { require_once __DIR__ . '/inc/widgets.php'; }
 if (is_file(__DIR__ . '/inc/kunye.php'))   { require_once __DIR__ . '/inc/kunye.php'; }
+// Üyelik modülü ÖN YÜZDE de gerekli (1.1): temalar member_current() varlığına
+// bakıp "Kaydet" düğmesini ve üye kutusunu basıyor. Modül yüklenmediği için
+// bu düğme beş temada da sessizce hiç basılmıyordu — üyeliğin görünür tek
+// getirisi ölü kalıyordu. Modül OTURUM AÇMAZ; member_current() içeride
+// has_session_cookie() kapısından geçer, yani önbellek kuralı korunur.
+if (is_file(__DIR__ . '/inc/members.php')) { require_once __DIR__ . '/inc/members.php'; }
+if (is_file(__DIR__ . '/inc/roles.php'))   { require_once __DIR__ . '/inc/roles.php'; }
 
 /**
  * İstek yolunu çözer.
@@ -166,7 +173,11 @@ switch ($head) {
         if ($slug === '') { render_404(); }
         // Slug'tan görünen etiket adını bul (etiketler serbest metin olarak saklanır)
         $label = $slug;
-        foreach (qa('SELECT tags FROM posts WHERE tags <> \'\' LIMIT 500') as $row) {
+        // Çöp kutusundaki ve yayımlanmamış haberlerin etiketleri ADI ÇÖZERKEN de
+        // görünmemeli (denetim turu 3, B11): silinen bir haberin özel etiketi
+        // etiket sayfasının başlığında sızıyordu.
+        $etiketSorgu = 'SELECT tags FROM posts p WHERE p.tags <> \'\' AND ' . published_where('p') . ' LIMIT 500';
+        foreach (qa($etiketSorgu, [':nowts' => now()]) as $row) {
             foreach (tags_to_array($row['tags']) as $t) {
                 if (slugify($t) === $slug) { $label = $t; break 2; }
             }
@@ -243,11 +254,21 @@ switch ($head) {
     // ---------------------------------------------------------------- besleme kısayolları
     case 'rss.xml':
     case 'feed':
-        header('Location: ' . base_url() . '/rss.php', true, 302);
+        // 301: bu kısayol KALICI bir adres eşlemesidir. 302, arama motorlarına
+        // "hedef geçici, eski adresi indekste tut" der ve besleme URL'si
+        // sonsuza dek ikili kalır. Apache'de .htaccess zaten 301 basıyor;
+        // burası mod_rewrite kapalı kurulumlar ve nginx/IIS için yedek yol.
+        //
+        // GÜVENLİK (denetim turu 3, B04): hedef GÖRELİ verilir. base_url() ana adı
+        // `HTTP_HOST`'tan türetir ve B-06 koruması yalnız `site_url` ayarı DOLUYKEN
+        // devreye girer; ayar boşken zehirli bir Host başlığı ziyaretçiyi saldırganın
+        // adresine KALICI olarak (301, tarayıcıda süresiz saklanır) gönderebiliyordu.
+        // Göreli Location başlığı RFC 7231'de geçerlidir ve ana adı denklemden çıkarır.
+        header('Location: ' . site_path() . '/rss.php', true, 301);
         exit;
 
     case 'sitemap.xml':
-        header('Location: ' . base_url() . '/sitemap.php', true, 302);
+        header('Location: ' . site_path() . '/sitemap.php', true, 301);
         exit;
 
     case 'robots.txt':

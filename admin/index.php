@@ -13,6 +13,7 @@ ob_start();
 
 require_once dirname(__DIR__) . '/inc/bootstrap.php';
 
+
 if (!MANSET_INSTALLED) {
     header('Location: ' . base_url() . '/install/', true, 302);
     ob_end_flush();
@@ -56,7 +57,7 @@ function admin_nav() {
         'theme'       => ['label' => 'Tema Editörü',       'perm' => 'theme.manage',       'group' => 'Görünüm',   'icon' => '◐'],
 
         'settings'    => ['label' => 'Ayarlar',            'perm' => 'settings.manage',    'group' => 'Ayarlar',   'icon' => '⚙'],
-        'kunye'       => ['label' => 'Künye / BİK',        'perm' => 'settings.manage',    'group' => 'Ayarlar',   'icon' => '§'],
+        'kunye'       => ['label' => 'Künye / BİK',        'perm' => 'kunye.manage',       'group' => 'Ayarlar',   'icon' => '§'],
         'widgets'     => ['label' => 'Widget\'lar',        'perm' => 'settings.manage',    'group' => 'Ayarlar',   'icon' => '◱'],
         'corrections' => ['label' => 'Düzeltme Talepleri', 'perm' => 'corrections.triage', 'group' => 'Ayarlar',   'icon' => '⚖'],
         'users'       => ['label' => 'Kullanıcılar',       'perm' => 'users.manage',       'group' => 'Ayarlar',   'icon' => '☺'],
@@ -66,6 +67,26 @@ function admin_nav() {
         'tools'       => ['label' => 'Araçlar',            'perm' => 'tools.manage',       'group' => 'Araçlar',   'icon' => '⚒'],
         'logs'        => ['label' => 'Günlükler',          'perm' => 'tools.manage',       'group' => 'Araçlar',   'icon' => '☰'],
     ];
+}
+
+/**
+ * Bir panel sayfasının gerektirdiği izin. Bilinmeyen sayfa için null → ERİŞİM YOK.
+ *
+ * Kaynak sırası:
+ *   1) Menü kaydı (`admin_nav()`) — sayfaların çoğu buradadır.
+ *   2) Menüde GÖRÜNMEYEN ama meşru sayfalar (aşağıdaki liste) — ör. yalnız
+ *      bağlantıyla ulaşılan yardımcı ekranlar.
+ * İkisinde de yoksa null döner ve kapı kapanır (fail-closed).
+ */
+function admin_page_permission($page, array $nav) {
+    if (isset($nav[$page]['perm'])) { return (string)$nav[$page]['perm']; }
+
+    // Menüde yer almayan ama erişilebilir sayfalar. Yeni sayfa eklendiğinde
+    // ya menüye ya buraya yazılmalıdır — aksi hâlde açılmaz.
+    $menusuz = [
+        'login' => 'admin.access',
+    ];
+    return isset($menusuz[$page]) ? $menusuz[$page] : null;
 }
 
 /** Panel sayfası adresi. */
@@ -209,6 +230,19 @@ if (!can($adminUser, 'admin.access')) {
     exit;
 }
 
+// YÜKSELTME KANCASI (1.1) — KİMLİK VE YETKİ DOĞRULANDIKTAN SONRA.
+// GÜVENLİK (denetim turu 3, B01): kanca eskiden bootstrap'ın hemen ardındaydı,
+// yani giriş ekranından ÖNCE. Çerezsiz bir `GET /admin/` isteği şema göçünü
+// tam olarak uygulayabiliyordu (denetçi canlı kanıtladı). Göç bir hata yüzünden
+// yarıda kalırsa her anonim istek göçü ve cache_flush()'ı tekrar denerdi.
+// Artık yalnız panel yetkisi olan bir oturum tetikleyebilir.
+if (function_exists('upgrade_pending') && upgrade_pending()) {
+    $mansetYukseltme = upgrade_run();
+    if ($mansetYukseltme['ok'] && $mansetYukseltme['from'] !== '') {
+        $_SESSION['yukseltme'] = $mansetYukseltme;
+    }
+}
+
 // ============================================================ sayfa yükleme
 
 $nav = admin_nav();
@@ -222,7 +256,13 @@ if (!admin_page_exists($page)) {
         $page = 'dashboard';
     }
 }
-if (isset($nav[$page]) && !can($adminUser, $nav[$page]['perm'])) {
+// FAIL-CLOSED SAYFA KAPISI (1.1).
+// Eskiden kapı `isset($nav[$page])`'e bağlıydı: menüde olmayan sayfa için
+// izin hiç sorulmuyordu. Artık izin MENÜDEN BAĞIMSIZ haritadan okunuyor ve
+// haritada olmayan sayfaya erişim YOK. Yeni sayfa ekleyen, haritaya da
+// eklemek zorunda: unutursa sayfa açılmaz — sessizce korumasız kalmaz.
+$sayfaIzni = admin_page_permission($page, $nav);
+if ($sayfaIzni === null || !can($adminUser, $sayfaIzni)) {
     http_response_code(403);
     $adminPageTitle = 'Yetkisiz';
     $adminForbidden = true;
@@ -244,6 +284,22 @@ $adminContent = (string)ob_get_clean();
 
 admin_layout($adminPageTitle, $adminContent, $adminPage, $adminUser, $nav);
 ob_end_flush();
+
+// "POOR MAN'S CRON" (1.1-08) — gerçek cron kuramayan paylaşımlı hostingler için.
+// Sayfa ziyaretçiye GÖNDERİLDİKTEN SONRA çalışır: fastcgi_finish_request() varsa
+// bağlantı kapanır ve kullanıcı beklemez. Yalnız PANELDE tetiklenir; ön yüzde
+// çağrılsaydı anonim istek süresi uzar ve sayfa önbelleğinin anlamı kalmazdı.
+// cron_web_tick_maybe() üç koşulu kendisi denetler (ayar açık mı, son çalışma
+// 15 dakikadan eski mi, kilit boşta mı); hiçbiri sağlanmazsa tek SELECT ile döner.
+if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
+if (is_file(ROOT_DIR . '/cron.php')) {
+    if (!defined('MANSET_CRON_LIB')) { define('MANSET_CRON_LIB', 1); }
+    require_once ROOT_DIR . '/cron.php';
+    if (function_exists('cron_web_tick_maybe')) {
+        try { cron_web_tick_maybe(); }
+        catch (Throwable $e) { log_error('cron_web_tick: ' . $e->getMessage()); }
+    }
+}
 
 // ============================================================ çatı
 

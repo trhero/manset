@@ -59,8 +59,15 @@ foreach ($blocks as $b) {
                 <?php if ($kimg): ?>
                   <figure class="kapak-gorsel">
                     <a href="<?= esc(url_post($kapak)) ?>">
-                      <img src="<?= esc($kimg) ?>"<?= $ksrc ? ' srcset="' . esc($ksrc) . '" sizes="(max-width:900px) 100vw, 780px"' : '' ?>
-                           alt="<?= esc($kapak['title']) ?>" loading="lazy" decoding="async">
+                      <?php /* Anasayfanin KAPAK gorselidir: sayfanin LCP adayi.
+                           Tembel yuklemek tarayicinin onu gec kesfetmesine yol acar. */ ?>
+                      <picture>
+                        <?php $kwebp = post_image_webp_srcset($kapak); if ($kwebp !== ''): ?>
+                          <source type="image/webp" srcset="<?= esc($kwebp) ?>" sizes="(max-width:900px) 100vw, 780px">
+                        <?php endif; ?>
+                        <img src="<?= esc($kimg) ?>"<?= $ksrc ? ' srcset="' . esc($ksrc) . '" sizes="(max-width:900px) 100vw, 780px"' : '' ?>
+                             alt="<?= esc($kapak['title']) ?>" <?= post_image_attrs($kapak, 'large', true) ?>>
+                      </picture>
                     </a>
                   </figure>
                 <?php endif; ?>

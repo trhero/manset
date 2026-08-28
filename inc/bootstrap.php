@@ -7,7 +7,7 @@
 
 if (defined('MANSET_BOOTSTRAPPED')) { return; }
 define('MANSET_BOOTSTRAPPED', true);
-define('MANSET_VERSION', '1.0.0');
+define('MANSET_VERSION', '1.1.0');
 define('ROOT_DIR', dirname(__DIR__));
 define('INC_DIR', ROOT_DIR . '/inc');
 define('DB_DIR', ROOT_DIR . '/db');
@@ -89,9 +89,18 @@ function cfg($key, $default = null) {
 }
 
 // ---------------------------------------------------------------- veritabanı
-/** Tekil PDO bağlantısı. SQLite'ta WAL + busy_timeout uygulanır. */
-function db() {
+/**
+ * Tekil PDO bağlantısı. SQLite'ta WAL + busy_timeout uygulanır.
+ *
+ * $reset = true: bağlantıyı DÜŞÜRÜR ve null döner. Yalnız yapılandırma
+ * istek ortasında değiştiğinde gerekir — pratikte tek yer kurulum
+ * sihirbazıdır: yapılandırmayı yazmadan önce bir şey veritabanına
+ * dokunmuşsa bağlantı VARSAYILAN yola kilitlenmiş olur ve şema yanlış
+ * dosyaya kurulur (1.1'de tam olarak bu yaşandı).
+ */
+function db($reset = false) {
     static $pdo = null;
+    if ($reset) { $pdo = null; return null; }
     if ($pdo instanceof PDO) { return $pdo; }
     $driver = cfg('db_driver', 'sqlite');
     $opts = [
@@ -119,6 +128,9 @@ function db() {
 
 /** Aktif sürücü adı: 'sqlite' | 'mysql' */
 function db_driver() { return cfg('db_driver', 'sqlite') === 'mysql' ? 'mysql' : 'sqlite'; }
+
+/** Bağlantıyı düşürür (bkz. db($reset)). */
+function db_reset() { db(true); }
 
 /** Sorgu çalıştırır, PDOStatement döndürür. Parametreler daima bağlanır. */
 function q($sql, $params = []) {
@@ -219,7 +231,11 @@ function slugify($text, $maxLen = 90) {
         'ğ' => 'g', 'Ğ' => 'g', 'ü' => 'u', 'Ü' => 'u', 'ş' => 's', 'Ş' => 's',
         'ı' => 'i', 'İ' => 'i', 'ö' => 'o', 'Ö' => 'o', 'ç' => 'c', 'Ç' => 'c',
         'â' => 'a', 'Â' => 'a', 'î' => 'i', 'Î' => 'i', 'û' => 'u', 'Û' => 'u',
-        'é' => 'e', 'É' => 'e', 'ñ' => 'n', 'ß' => 'ss', 'æ' => 'ae', 'ø' => 'o', 'å' => 'a',
+        'é' => 'e', 'É' => 'e', 'ñ' => 'n', 'Ñ' => 'n', 'ß' => 'ss',
+        // Büyük biçimler de haritada OLMALI: harita mb_strtolower'dan ÖNCE
+        // çalışıyor (Türkçe 'İ' için bilinçli), dolayısıyla eksik büyük harf
+        // sonraki süzgeçte sessizce silinir — 'Øslo' → 'slo' oluyordu.
+        'æ' => 'ae', 'Æ' => 'ae', 'ø' => 'o', 'Ø' => 'o', 'å' => 'a', 'Å' => 'a',
     ];
     $text = strtr($text, $map);
     // Kesme işareti ayraç sayılmaz: "İstanbul'da" → "istanbulda" (Türkçe haber başlıklarında çok yaygın)
@@ -293,6 +309,30 @@ function tr_ago($dt) {
 
 // ---------------------------------------------------------------- URL
 /** Sitenin taban URL'i (sondaki bölü çizgisi olmadan). */
+/**
+ * Sitenin kök YOLU (ana ad olmadan): '' ya da '/haber' gibi.
+ *
+ * Göreli yönlendirmeler için. base_url() ana adı istemcinin gönderdiği
+ * `HTTP_HOST` başlığından türetir; kalıcı (301) bir yönlendirmede bu,
+ * zehirli bir başlıkla ziyaretçiyi saldırganın adresine SÜRESİZ kilitleyebilir
+ * (denetim turu 3, B04). Yalnız yol kullanıldığında ana ad denklemden çıkar.
+ * SCRIPT_NAME sunucu tarafından belirlenir, istemci girdisi değildir.
+ */
+function site_path() {
+    static $p = null;
+    if ($p !== null) { return $p; }
+    $fromCfg = trim((string)cfg('base_url', ''));
+    if ($fromCfg !== '') {
+        $yol = (string)parse_url(rtrim($fromCfg, '/'), PHP_URL_PATH);
+        return $p = rtrim((string)$yol, '/');
+    }
+    $script = isset($_SERVER['SCRIPT_NAME']) ? (string)$_SERVER['SCRIPT_NAME'] : '/index.php';
+    $dir = rtrim(str_replace('\\', '/', dirname($script)), '/');
+    if ($dir === '.') { $dir = ''; }
+    $dir = preg_replace('#/(admin|install)(/pages)?$#', '', $dir);
+    return $p = $dir;
+}
+
 function base_url() {
     static $b = null;
     if ($b !== null) { return $b; }
@@ -501,6 +541,185 @@ function rate_limit($bucket, $max, $windowSeconds) {
 /** Sayaç kaydını sıfırlar (başarılı girişten sonra). */
 function rate_limit_clear($bucket) {
     try { q('DELETE FROM rate_limits WHERE bucket = :b', [':b' => $bucket]); } catch (Throwable $e) { }
+}
+
+// ---------------------------------------------------------------- hata yakalama
+/**
+ * Yakalanmamış istisna/ölümcül hata işleyicisi.
+ *
+ * NEDEN: 1.0'da yakalanmamış bir istisna API isteğinde bile HTML yığın izi
+ * basıyordu. İki ayrı sorun: (a) istemci JSON beklerken HTML alıyor ve
+ * "Bağlantı kurulamadı" gibi yanıltıcı bir hata gösteriyor; (b) yığın izi
+ * dosya yollarını ve sorgu parçalarını sızdırıyor.
+ *
+ * Ayrıntı YALNIZ hata günlüğüne yazılır; kullanıcıya sabit bir mesaj döner.
+ */
+function manset_exception_handler($e) {
+    $mesaj = ($e instanceof Throwable) ? $e->getMessage() : 'bilinmeyen';
+    $yer   = ($e instanceof Throwable) ? (basename($e->getFile()) . ':' . $e->getLine()) : '';
+    log_error('Yakalanmamış istisna: ' . $mesaj . ' @ ' . $yer);
+
+    if (headers_sent()) {
+        // Çıktı başlamışsa durum kodu değiştirilemez: ziyaretçi YARIM bir sayfa
+        // ve HTTP 200 görür (denetim turu 3, B10). En azından sayfanın kesildiği
+        // görünür olsun — sessizce yarım kalan sayfa, hatasız sanılır ve
+        // yanlış içerik (ör. eksik düzeltme metni) doğru gibi okunur.
+        echo "\n<!-- manset: istek yarıda kesildi -->\n"
+           . '<p style="font:14px system-ui;padding:16px;border-top:2px solid #b91c1c;'
+           . 'color:#b91c1c">Bu sayfa bir hata yüzünden eksik kaldı. Lütfen yenileyin.</p>';
+        return;
+    }
+    http_response_code(500);
+
+    if (function_exists('is_json_request') && is_json_request()) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['ok' => false, 'error' => 'Sunucu hatası. Lütfen tekrar deneyin.'],
+                         JSON_UNESCAPED_UNICODE);
+        return;
+    }
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!doctype html><meta charset="utf-8"><title>Sunucu hatası</title>'
+       . '<p style="font:16px system-ui;padding:40px">Beklenmeyen bir hata oluştu. '
+       . 'Ayrıntı site yöneticisinin hata günlüğüne yazıldı.</p>';
+}
+set_exception_handler('manset_exception_handler');
+
+/**
+ * Çöp kutusunu eleyen SQL parçası: " AND p.deleted_at = ''" ya da ''.
+ *
+ * Panel sayaçları `published_where()` kullanmaz (yayımlanmamışları da sayarlar),
+ * bu yüzden yumuşak silme kapısını ELLE eklemek zorundadırlar. Aynı koşulun
+ * beş ayrı yerde tekrar yazılması, birinin unutulmasıyla sonuçlanıyordu
+ * (denetim turu 3, B09). Sütun yoksa boş dize döner — göç 013 uygulanmamış
+ * kurulumda sorgular aynen çalışır.
+ *
+ * @param string $alias Tablo takma adı ('p') ya da boş dize (takma ad yoksa).
+ */
+function trash_filter_sql($alias = 'p') {
+    static $var = null;
+    if ($var === null) {
+        $var = function_exists('schema_has_column') ? schema_has_column('posts', 'deleted_at') : false;
+    }
+    if (!$var) { return ''; }
+    $on = $alias !== '' ? $alias . '.' : '';
+    return " AND " . $on . "deleted_at = ''";
+}
+
+// ---------------------------------------------------------------- yükseltme
+/**
+ * Kurulu şema sürümü ile kod sürümü aynı mı?
+ *
+ * NEDEN GEREKLİ: 1.0'da `migrations_run()` yalnız kurulumda ve panelde bir
+ * düğmeyle çalışıyordu (inc/schema.php, inc/api/tools.php). Yeni sürümün
+ * zip'ini FTP ile üstüne atan yönetici o düğmeyi bilmezse site yarı çalışır:
+ * kod yeni sütunları bekler, veritabanında yoktur. Kod bunu beş ayrı yerde
+ * iç içe try/catch ile kurtarmaya çalışıyordu — sessiz ve kırılgan.
+ */
+function upgrade_pending() {
+    if (!MANSET_INSTALLED) { return false; }
+    return setting('installed_version', '') !== MANSET_VERSION;
+}
+
+/**
+ * Veritabanında korunmaya değer veri var mı?
+ *
+ * Yükseltme yedeğinin alınıp alınmayacağına karar verir. Taze kurulumda
+ * (henüz içerik yok) yedek almanın anlamı yoktur; dolu bir kurulumda ise
+ * göç geri alınamaz olduğu için yedek TEK güvencedir.
+ */
+function upgrade_has_data() {
+    try {
+        if ((int)qv('SELECT COUNT(*) FROM posts', [], 0) > 0) { return true; }
+        return (int)qv('SELECT COUNT(*) FROM users', [], 0) > 1;
+    } catch (Throwable $e) {
+        // Tablo okunamıyorsa güvenli taraf: yedek almayı DENE.
+        return true;
+    }
+}
+
+/**
+ * Yükseltmeyi uygular: yedek → göç → önbellek temizliği → damga.
+ *
+ * YALNIZ YETKİLİ BAĞLAMDAN çağrılır (panel girişi, cron). Anonim ön yüz
+ * isteğinde şema değiştirmek yarış koşulu yaratır ve ilk ziyaretçiye
+ * saniyeler süren bir istek olarak yansır. Ön yüz bekleyen göçle de
+ * çalışmaya devam eder (mevcut try/catch yedekleri korunuyor).
+ *
+ * Kilit: iki panel isteği aynı anda gelirse göç iki kez koşmasın. Göçler
+ * idempotent yazılıyor ama ALTER TABLE yarışı sürücüde hataya düşebilir.
+ *
+ * @return array ['ok'=>bool, 'from'=>string, 'to'=>string, 'applied'=>array, 'error'=>string]
+ */
+function upgrade_run() {
+    $from = setting('installed_version', '');
+    $sonuc = ['ok' => false, 'from' => $from, 'to' => MANSET_VERSION, 'applied' => [], 'error' => ''];
+
+    $kilit = DB_DIR . '/.upgrading';
+    // GÜVENLİK/DAYANIKLILIK (denetim turu 3, B05): kilit dosyası SİLİNMEZ.
+    // Eski kod 10 dakikadan eski dosyayı @unlink ile siliyordu; iki istek aynı
+    // anda silip YENİ ve FARKLI birer inode oluşturabiliyor, ikisi de flock'u
+    // alıp göçü aynı anda koşabiliyordu. Oysa flock zaten yarışsızdır ve süreç
+    // çökse bile işletim sistemi kilidi BIRAKIR — yani "ölü flock" diye bir şey
+    // yoktur. Dosyayı silmek sorunu çözmüyor, yaratıyordu.
+    $fh = @fopen($kilit, 'c');
+    if (!$fh) { $sonuc['error'] = 'Kilit dosyası açılamadı: ' . $kilit; return $sonuc; }
+    if (!@flock($fh, LOCK_EX | LOCK_NB)) {
+        fclose($fh);
+        $sonuc['error'] = 'Yükseltme başka bir istekte sürüyor.';
+        return $sonuc;
+    }
+
+    try {
+        // Yükseltme öncesi yedek: göç geri alınamaz, tek güvence budur.
+        // DENETİM TURU 3 (B02): `function_exists('backup_create')` HİÇBİR ZAMAN
+        // doğru değildi — inc/backup.php ne panel ne cron bağlamında yüklüdür.
+        // "Yükseltme öncesi yedek alınır" vaadi sessizce hiç gerçekleşmiyordu.
+        // Modül burada AÇIKÇA yüklenir; yedek alınamazsa yükseltme yine sürer
+        // (yedek yokluğu yükseltmeyi engellememeli) ama kayda düşülür.
+        // Yedek kararı `$from`'a DEĞİL, veritabanında gerçek veri olup
+        // olmadığına bakar. Sürüm damgası 1.1 ile geldiği için 1.0'dan
+        // yükselten kurulumda `$from` BOŞTUR; eski koşul tam da yedeğe en çok
+        // ihtiyaç duyulan durumda yedeği atlıyordu (uçtan uca denemede yakalandı).
+        if (upgrade_has_data()) {
+            try {
+                if (!function_exists('backup_create') && is_file(INC_DIR . '/backup.php')) {
+                    require_once INC_DIR . '/backup.php';
+                }
+                if (function_exists('backup_create')) {
+                    $yedek = backup_create();
+                    $sonuc['backup'] = (is_array($yedek) && !empty($yedek['ok']))
+                        ? (string)arr($yedek, 'file', '?') : '';
+                    if ($sonuc['backup'] === '') { log_error('upgrade: yedek alınamadı'); }
+                } else {
+                    log_error('upgrade: backup modülü bulunamadı, yedeksiz sürüldü');
+                }
+            } catch (Throwable $e) { log_error('upgrade yedek: ' . $e->getMessage()); }
+        }
+        // migrations_run() inc/schema.php icinde tanimli ve o dosya her baglamda
+        // yuklu DEGIL (panel ve cron yalniz bootstrap yukler). Yuklemeden cagirmak
+        // "Call to undefined function" veriyordu: goc hic kosmuyor, tablolar
+        // olusmuyor ve site komple duzuyordu.
+        if (!function_exists('migrations_run')) {
+            require_once INC_DIR . '/schema.php';
+        }
+        $sonuc['applied'] = migrations_run();
+        if (function_exists('cache_flush')) { cache_flush(); }
+        setting_set('installed_version', MANSET_VERSION);
+        setting_set('upgraded_at', now());
+        settings_all(true);   // ayar önbelleğini tazele
+        $sonuc['ok'] = true;
+    } catch (Throwable $e) {
+        $sonuc['error'] = $e->getMessage();
+        log_error('upgrade_run: ' . $e->getMessage());
+    }
+
+    @flock($fh, LOCK_UN);
+    fclose($fh);
+    // Kilit dosyasi SILINMEZ (bkz. yukaridaki B05 aciklamasi). Silmek, ayni
+    // dosyayi acmis baska bir surecin elinde ARTIK VAR OLMAYAN bir inode
+    // birakir; o surec kilidi "alir" ama kimseyle paylasmaz. Bos bir dosyanin
+    // diskte durmasinin maliyeti yok.
+    return $sonuc;
 }
 
 // ---------------------------------------------------------------- kullanıcı / rol

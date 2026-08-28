@@ -27,8 +27,84 @@ require_once __DIR__ . '/ai.php';
 
 /** Takılmış sayılan 'running' süresi (saniye). */
 if (!defined('AI_JOB_STUCK_SECONDS')) { define('AI_JOB_STUCK_SECONDS', 600); }
-/** Bir işin en çok kaç kez denenebileceği. */
+/** Bir işin en çok kaç kez denenebileceği (kalıcı/bilinmeyen hatalar). */
 if (!defined('AI_JOB_MAX_ATTEMPTS')) { define('AI_JOB_MAX_ATTEMPTS', 3); }
+/** Geçici hatada (5xx / 429 / bağlantı kurulamadı) izin verilen azami deneme. */
+if (!defined('AI_JOB_MAX_RETRIES')) { define('AI_JOB_MAX_RETRIES', 6); }
+/*
+ * NEDEN (B08): zaman aşımı diğer geçici hatalarla AYNI sınıfta olduğu için tek
+ * bir iş 7 kez çağrı yapabiliyordu. Oysa zaman aşımında sağlayıcı çağrıyı
+ * TAMAMLAMIŞ ve ÜCRETLENDİRMİŞ olabilir; yanıt yalnız bize ulaşmamıştır.
+ * Ücretlendirilmiş olabilecek bir çağrıyı 7 kez tekrarlamak makul değildir:
+ * zaman aşımı ayrı bir sınıfa alındı ve denemesi 3'e (toplam 3 HTTP çağrısı)
+ * indirildi. 5xx/429 gibi "sunucu işi kabul etmedi" hataları eskisi gibi kalır.
+ */
+/** Zaman aşımı / boş yanıt sınıfında izin verilen azami deneme. */
+if (!defined('AI_JOB_MAX_TIMEOUT_ATTEMPTS')) { define('AI_JOB_MAX_TIMEOUT_ATTEMPTS', 3); }
+/** Üstel geri çekilmede en uzun bekleme (dakika). */
+if (!defined('AI_JOB_MAX_BACKOFF_MIN')) { define('AI_JOB_MAX_BACKOFF_MIN', 60); }
+
+// ============================================================ geri çekilme
+/*
+ * NEDEN (1.1-07): 1.0'da sağlayıcı 10 dakikalığına çökse iş üç denemede
+ * `failed` olup çöpe gidiyordu — oysa hata işin değil, karşı tarafın.
+ * Artık GEÇİCİ hatalarda iş `queued` kalır ve `ai_jobs.retry_after` ile
+ * üstel olarak ertelenir (1, 2, 4, 8… dakika). KALICI hatalarda (400
+ * geçersiz istek, 401 anahtar hatalı) beklemenin anlamı yoktur: doğrudan
+ * `failed`. Kuyruk çekilirken `retry_after <= now` koşulu uygulanır.
+ */
+
+/** ai_jobs.retry_after sütunu (göç 013) var mı? */
+function ai_jobs_has_retry_after() {
+    static $var = null;
+    if ($var === null) {
+        $var = function_exists('schema_has_column') && schema_has_column('ai_jobs', 'retry_after');
+    }
+    return $var;
+}
+
+/**
+ * Hata metnini sınıflandırır.
+ *
+ * NOT (B08): 'zaman_asimi' ayrı bir sınıftır. Sağlayıcı çağrıyı tamamlamış ve
+ * ücretlendirmiş olabilir; yanıt bize ulaşmamıştır. Bu yüzden 5xx/429'dan daha
+ * DAR bir deneme hakkı alır (bkz. AI_JOB_MAX_TIMEOUT_ATTEMPTS).
+ *
+ * @return string 'gecici' | 'zaman_asimi' | 'kalici' | 'bilinmiyor'
+ */
+function ai_error_class($error) {
+    $e = (string)$error;
+    if (trim($e) === '') { return 'bilinmiyor'; }
+
+    if (preg_match('/HTTP\s*(\d{3})/i', $e, $m)) {
+        $code = (int)$m[1];
+        // 408 Request Timeout: istek karşı tarafta zaman aşımına uğradı.
+        if ($code === 408) { return 'zaman_asimi'; }
+        if ($code >= 500 || $code === 429) { return 'gecici'; }
+        if ($code >= 400) { return 'kalici'; }
+    }
+    // Zaman aşımı / yarım kalmış yanıt: ücret oluşmuş OLABİLİR.
+    if (preg_match('/(zaman aşımı|zaman aşim|zamanaşımı|timeout|timed out|boş yanıt|Operation timed out)/iu', $e)) {
+        return 'zaman_asimi';
+    }
+    // Ağ katmanı: bağlantı hiç kurulamadı / DNS → sağlayıcı isteği ALMADI.
+    if (preg_match('/(Bağlantı hatası|Bağlantı kurulamadı|çözümlenemedi|ulaşılamadı|could not resolve|connection refused)/iu', $e)) {
+        return 'gecici';
+    }
+    // Sağlayıcının açık kimlik/istek hataları
+    if (preg_match('/(api[_ -]?key|anahtar|invalid[_ -]?request|unauthorized|authentication|permission|not_found|model)/i', $e)) {
+        return 'kalici';
+    }
+    return 'bilinmiyor';
+}
+
+/** Üstel geri çekilme: 1, 2, 4, 8… dakika (tavan AI_JOB_MAX_BACKOFF_MIN). */
+function ai_job_backoff_minutes($attempts) {
+    $n = max(1, (int)$attempts);
+    if ($n > 12) { $n = 12; }              // taşma kalkanı
+    $dk = (int)pow(2, $n - 1);
+    return max(1, min(AI_JOB_MAX_BACKOFF_MIN, $dk));
+}
 
 /** ai_jobs.kind için izinli değerler (CONTRACTS §2). */
 function ai_job_kinds() {
@@ -116,6 +192,14 @@ function ai_job_enqueue($rssItemId, $kind = 'rss_rewrite') {
 function ai_jobs_tick($max = 2) {
     if (!ai_configured()) { return 'yapılandırılmadı'; }
 
+    // BÜTÇE TAVANI: tavan aşıldıysa hiç çağrı yapılmaz. İşler kuyrukta bekler,
+    // deneme hakkı harcanmaz; ay dönünce ya da tavan yükseltilince devam eder.
+    if (function_exists('ai_budget_exceeded') && ai_budget_exceeded()) {
+        $d = ai_budget_status();
+        return 'aylık bütçe doldu (' . number_format((float)$d['harcanan'], 2, ',', '.') . ' / '
+             . number_format((float)$d['tavan'], 2, ',', '.') . '), kuyruk durduruldu';
+    }
+
     $max = max(1, min(20, (int)$max));
 
     try {
@@ -133,8 +217,23 @@ function ai_jobs_tick($max = 2) {
             return 'eşzamanlılık sınırı dolu (' . $running . '/' . $limit . '), iş alınmadı';
         }
 
-        $rows = qa('SELECT id FROM ai_jobs WHERE status = \'queued\' ORDER BY id ASC LIMIT ' . (int)$slots);
-        if (!$rows) { return 'bekleyen iş yok'; }
+        // Geri çekilmedeki işler (retry_after > now) bu turda alınmaz.
+        if (ai_jobs_has_retry_after()) {
+            $rows = qa('SELECT id FROM ai_jobs
+                        WHERE status = \'queued\' AND (retry_after IS NULL OR retry_after = \'\' OR retry_after <= :n)
+                        ORDER BY id ASC LIMIT ' . (int)$slots, [':n' => now()]);
+            $ertelenen = (int)qv('SELECT COUNT(*) FROM ai_jobs WHERE status = \'queued\' AND retry_after > :n',
+                [':n' => now()], 0);
+        } else {
+            $rows = qa('SELECT id FROM ai_jobs WHERE status = \'queued\' ORDER BY id ASC LIMIT ' . (int)$slots);
+            $ertelenen = 0;
+        }
+        if (!$rows) {
+            // items açıkça 0: "3 iş geri çekilmede" metnindeki sayı işlenmiş iş sanılmasın.
+            return ['items' => 0, 'ok' => true, 'note' => $ertelenen > 0
+                ? 'bekleyen iş yok (' . $ertelenen . ' iş geri çekilmede)'
+                : 'bekleyen iş yok'];
+        }
     } catch (Throwable $e) {
         log_error('ai_jobs_tick hazırlık: ' . $e->getMessage());
         return 'kuyruk okunamadı: ' . $e->getMessage();
@@ -143,15 +242,37 @@ function ai_jobs_tick($max = 2) {
     $done = 0;
     $ok = 0;
     $err = 0;
+    $kalan = 0;
     foreach ($rows as $r) {
+        /*
+         * Görev bütçesi. NEDEN (B03): eskiden rezerv olarak ai_timeout()
+         * (varsayılan 45 sn) isteniyordu; panel tetiklemesinin bütçesi bunun
+         * altında kaldığından AI görevi HİÇ iş almıyor, buna rağmen tur
+         * "başarılı" sayılıyordu. Artık çağrı zaman aşımı kalan süreye
+         * kısaldığı için (ai_effective_timeout) rezerv de o kadardır; yalnız
+         * anlamlı bir çağrıya bile yer kalmadıysa iş sonraki tura devredilir.
+         */
+        if (function_exists('cron_over_budget') && cron_over_budget(AI_MIN_TIMEOUT + 1)) {
+            $kalan = count($rows) - $done;
+            break;
+        }
         $res = ai_job_run((int)$r['id']);
         if (!empty($res['skipped'])) { continue; }   // başka bir tur işi kapmış
         $done++;
         if (!empty($res['ok'])) { $ok++; } else { $err++; }
     }
 
-    if ($done === 0) { return 'işlenecek iş kalmadı (yarış koşulu)'; }
-    return $done . ' iş işlendi, ' . $ok . ' başarılı, ' . $err . ' hata';
+    // NEDEN (B03): 'items' AÇIKÇA verilir. Metinden ilk sayı okunsaydı
+    // "süre doldu, 3 iş sonraki tura kaldı" 3 iş işlenmiş gibi görünür ve
+    // cron turu, hiç iş yapılmadığı hâlde "tam tur" sayılırdı.
+    if ($done === 0 && $kalan > 0) {
+        return ['items' => 0, 'ok' => true,
+                'note' => 'süre doldu, ' . $kalan . ' iş sonraki tura kaldı'];
+    }
+    if ($done === 0) { return ['items' => 0, 'ok' => true, 'note' => 'işlenecek iş kalmadı (yarış koşulu)']; }
+    return ['items' => $done, 'ok' => true, 'note' => $done . ' iş işlendi, ' . $ok . ' başarılı, ' . $err . ' hata'
+         . ($kalan > 0 ? ', süre doldu — ' . $kalan . ' iş sonraki tura kaldı' : '')
+         . ($ertelenen > 0 ? ', ' . $ertelenen . ' iş geri çekilmede' : '')];
 }
 
 /**
@@ -160,6 +281,14 @@ function ai_jobs_tick($max = 2) {
  * 1 satır etkiler; diğeri false alır ve işi atlar.
  */
 function ai_job_claim($jobId) {
+    if (ai_jobs_has_retry_after()) {
+        // İş sahiplenildiğinde erteleme damgası temizlenir.
+        $n = q('UPDATE ai_jobs SET status = \'running\', started_at = :t, attempts = attempts + 1,
+                       retry_after = \'\', finished_at = NULL
+                WHERE id = :i AND status = \'queued\'',
+            [':t' => now(), ':i' => (int)$jobId])->rowCount();
+        return $n === 1;
+    }
     $n = q('UPDATE ai_jobs SET status = \'running\', started_at = :t, attempts = attempts + 1, finished_at = NULL
             WHERE id = :i AND status = \'queued\'',
         [':t' => now(), ':i' => (int)$jobId])->rowCount();
@@ -223,15 +352,35 @@ function ai_job_run($jobId) {
 
 /**
  * Başarısız işi işaretler.
- * Deneme hakkı kaldıysa ve hata geçiciyse iş tekrar 'queued' olur;
- * hak bittiyse ya da hata kalıcıysa 'failed' olur.
+ *
+ * KARAR TABLOSU
+ *   kalıcı hata (400/401, doğrulama)     → 'failed' (beklemenin faydası yok)
+ *   geçici hata (5xx/429/bağlantı yok)   → 'queued' + retry_after = şimdi + 2^deneme dk,
+ *                                           AI_JOB_MAX_RETRIES denemeye kadar
+ *   zaman aşımı / boş yanıt              → 'queued' + üstel bekleme, ama YALNIZ
+ *                                           AI_JOB_MAX_TIMEOUT_ATTEMPTS denemeye kadar
+ *                                           (B08: ücretlendirilmiş olabilir)
+ *   bilinmeyen hata                      → 'queued' + 1 dk, AI_JOB_MAX_ATTEMPTS'e kadar
+ *
+ * @param bool $permanent Çağıranın "bu hata tekrar denenmemeli" kararı
  */
 function ai_job_mark_failed($jobId, $error, $permanent = false) {
     $jobId = (int)$jobId;
     $error = sanitize_line($error, 480);
     $row = q1('SELECT attempts, rss_item_id FROM ai_jobs WHERE id = :i', [':i' => $jobId]);
     $attempts = (int)arr($row, 'attempts', 0);
-    $final = $permanent || $attempts >= AI_JOB_MAX_ATTEMPTS;
+
+    $sinif = $permanent ? 'kalici' : ai_error_class($error);
+    // B08: zaman aşımının deneme hakkı 5xx/429'dan DAR (ücret oluşmuş olabilir).
+    if ($sinif === 'gecici')           { $limit = AI_JOB_MAX_RETRIES; }
+    elseif ($sinif === 'zaman_asimi')  { $limit = AI_JOB_MAX_TIMEOUT_ATTEMPTS; }
+    else                               { $limit = AI_JOB_MAX_ATTEMPTS; }
+    $final = ($sinif === 'kalici') || $attempts >= $limit;
+
+    // Geçici/zaman aşımı hatasında üstel geri çekilme; bilinmeyende kısa soluklanma.
+    $dk = ($sinif === 'gecici' || $sinif === 'zaman_asimi') ? ai_job_backoff_minutes($attempts) : 1;
+    $retryAfter = date('Y-m-d H:i:s', time() + $dk * 60);
+
     try {
         if ($final) {
             q('UPDATE ai_jobs SET status = \'failed\', error = :e, finished_at = :f WHERE id = :i',
@@ -239,14 +388,20 @@ function ai_job_mark_failed($jobId, $error, $permanent = false) {
             // Öge sonsuza dek 'queued' kalmasın; "Yeniden dene" ile tekrar işlenebilir.
             q('UPDATE rss_items SET status = \'skipped\' WHERE id = :i AND status = \'queued\'',
                 [':i' => (int)arr($row, 'rss_item_id', 0)]);
+        } elseif (ai_jobs_has_retry_after()) {
+            q('UPDATE ai_jobs SET status = \'queued\', error = :e, retry_after = :r, finished_at = NULL WHERE id = :i',
+                [':e' => $error, ':r' => $retryAfter, ':i' => $jobId]);
         } else {
+            // Göç 013 uygulanmadıysa erteleme saklanamaz: 1.0 davranışı sürer.
             q('UPDATE ai_jobs SET status = \'queued\', error = :e, finished_at = NULL WHERE id = :i',
                 [':e' => $error, ':i' => $jobId]);
         }
     } catch (Throwable $e) {
         log_error('ai_job_mark_failed #' . $jobId . ': ' . $e->getMessage());
     }
-    log_error('ai_jobs #' . $jobId . ' hata (' . $attempts . '/' . AI_JOB_MAX_ATTEMPTS . '): ' . $error);
+
+    log_error('ai_jobs #' . $jobId . ' hata (' . $attempts . '/' . $limit . ', ' . $sinif . ')'
+        . ($final ? '' : ' — ' . $dk . ' dk sonra yeniden denenecek') . ': ' . $error);
     return ['ok' => false, 'post_id' => 0, 'error' => $error, 'skipped' => false];
 }
 
@@ -383,31 +538,42 @@ function ai_create_post_from_result(array $rssItem, array $result) {
     $image = trim((string)arr($rssItem, 'image', ''));
     if ($image !== '' && (!sanitize_is_safe_url($image, false) || mb_strlen($image) > 255)) { $image = ''; }
 
+    /*
+     * NEDEN (denetim turu 3, B13): "ajans/otomasyon kaynaklı" yetki kararı elle
+     * doldurulabilen `source_url` alanına dayanamaz. Sistem sahipli `is_wire`
+     * bayrağını yalnız içe aktarıcılar yazar; bu haber AI kuyruğundan doğduğu
+     * için bayrak 1'dir. Göç 014 uygulanmamışsa sütun yoktur → alan eklenmez.
+     */
+    $alanlar = [
+        'title'         => $title,
+        'slug'          => unique_slug('posts', $title),
+        'spot'          => (string)arr($result, 'spot', ''),
+        'body'          => $body,
+        'image'         => $image,
+        'category_id'   => $catId,
+        'author_id'     => $authorId,
+        'status'        => $status,
+        'type'          => 'haber',
+        'source_name'   => $sourceName,
+        'source_url'    => $sourceUrl,
+        'ai_generated'  => 1,
+        'seo_title'     => sanitize_line((string)arr($result, 'seo_title', ''), 255),
+        'seo_desc'      => sanitize_line((string)arr($result, 'seo_desc', ''), 500),
+        'tags'          => tags_to_string(arr($result, 'tags', [])),
+        'view_count'    => 0,
+        'is_headline'   => 0,
+        'headline_sort' => 0,
+        'is_breaking'   => 0,
+        'published_at'  => $autoPublish ? now() : null,
+        'created_at'    => now(),
+        'updated_at'    => now(),
+    ];
+    if (function_exists('schema_has_column') && schema_has_column('posts', 'is_wire')) {
+        $alanlar['is_wire'] = 1;
+    }
+
     try {
-        $postId = db_insert('posts', [
-            'title'         => $title,
-            'slug'          => unique_slug('posts', $title),
-            'spot'          => (string)arr($result, 'spot', ''),
-            'body'          => $body,
-            'image'         => $image,
-            'category_id'   => $catId,
-            'author_id'     => $authorId,
-            'status'        => $status,
-            'type'          => 'haber',
-            'source_name'   => $sourceName,
-            'source_url'    => $sourceUrl,
-            'ai_generated'  => 1,
-            'seo_title'     => sanitize_line((string)arr($result, 'seo_title', ''), 255),
-            'seo_desc'      => sanitize_line((string)arr($result, 'seo_desc', ''), 500),
-            'tags'          => tags_to_string(arr($result, 'tags', [])),
-            'view_count'    => 0,
-            'is_headline'   => 0,
-            'headline_sort' => 0,
-            'is_breaking'   => 0,
-            'published_at'  => $autoPublish ? now() : null,
-            'created_at'    => now(),
-            'updated_at'    => now(),
-        ]);
+        $postId = db_insert('posts', $alanlar);
     } catch (Throwable $e) {
         log_error('ai_create_post_from_result: ' . $e->getMessage());
         return ['ok' => false, 'post_id' => 0, 'error' => 'Haber kaydedilemedi: ' . $e->getMessage()];
@@ -509,14 +675,21 @@ function ai_jobs_count(array $filters = []) {
     } catch (Throwable $e) { return 0; }
 }
 
-/** Duruma göre sayaçlar: ['queued','running','done','failed','total']. */
+/**
+ * Duruma göre sayaçlar: ['queued','running','done','failed','total','deferred'].
+ * 'deferred' = kuyrukta ama geri çekilme nedeniyle saati gelmemiş işler.
+ */
 function ai_jobs_stats() {
-    $out = ['queued' => 0, 'running' => 0, 'done' => 0, 'failed' => 0, 'total' => 0];
+    $out = ['queued' => 0, 'running' => 0, 'done' => 0, 'failed' => 0, 'total' => 0, 'deferred' => 0];
     try {
         foreach (qa('SELECT status, COUNT(*) AS n FROM ai_jobs GROUP BY status') as $r) {
             $s = (string)$r['status'];
             if (isset($out[$s])) { $out[$s] = (int)$r['n']; }
             $out['total'] += (int)$r['n'];
+        }
+        if (ai_jobs_has_retry_after()) {
+            $out['deferred'] = (int)qv('SELECT COUNT(*) FROM ai_jobs WHERE status = \'queued\' AND retry_after > :n',
+                [':n' => now()], 0);
         }
     } catch (Throwable $e) { /* tablo yoksa sıfır */ }
     return $out;
@@ -533,8 +706,13 @@ function ai_job_retry($jobId) {
     if ($job['status'] === 'done') {
         return ['ok' => false, 'error' => 'Tamamlanmış iş yeniden çalıştırılamaz (haber ikinci kez üretilirdi).', 'message' => ''];
     }
-    q('UPDATE ai_jobs SET status = \'queued\', attempts = 0, error = \'\', started_at = NULL, finished_at = NULL WHERE id = :i',
-        [':i' => $jobId]);
+    if (ai_jobs_has_retry_after()) {
+        q('UPDATE ai_jobs SET status = \'queued\', attempts = 0, error = \'\', retry_after = \'\',
+                  started_at = NULL, finished_at = NULL WHERE id = :i', [':i' => $jobId]);
+    } else {
+        q('UPDATE ai_jobs SET status = \'queued\', attempts = 0, error = \'\', started_at = NULL, finished_at = NULL WHERE id = :i',
+            [':i' => $jobId]);
+    }
     q('UPDATE rss_items SET status = \'queued\' WHERE id = :i AND status = \'skipped\'',
         [':i' => (int)qv('SELECT rss_item_id FROM ai_jobs WHERE id = :i', [':i' => $jobId], 0)]);
     return ['ok' => true, 'error' => '', 'message' => 'İş yeniden kuyruğa alındı.'];

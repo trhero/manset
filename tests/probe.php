@@ -10,6 +10,7 @@
  *   php tests/probe.php <kök> session_after_body
  *   php tests/probe.php <kök> hash_token <ham>
  *   php tests/probe.php <kök> missing_perms
+ *   php tests/probe.php <kök> unused_perms
  *   php tests/probe.php <kök> pw_stamp_binds
  *   php tests/probe.php <kök> rate_limit_order
  *   php tests/probe.php <kök> srcset_gate
@@ -111,6 +112,42 @@ switch ($soru) {
         echo implode(',', $eksik);
         break;
 
+    // Katalogda TANIMLI ama hiçbir kapıda KULLANILMAYAN izinler.
+    //
+    // missing_perms'in TERSİ. Tur 2'nin iki kritiği de "kural vardı, kapı yoktu"
+    // sınıfındandı: `theme.css` izni tanımlıydı ama okunmuyordu, ödeme duvarı
+    // temalarda çalışıyordu ama beslemeler kapıyı çağırmıyordu. Tanımsız kapı
+    // fail-closed davranır (missing_perms onu yakalar); kapısız izin ise
+    // SESSİZCE ÖLÜ bir yetkidir — rol matrisinde görünür, hiçbir şey yapmaz.
+    // Yayıncı o izni açar, hiçbir şey değişmez, kimse fark etmez.
+    case 'unused_perms':
+        $tanimli = array_keys(roles_permissions());
+        $kullanilan = [];
+        $tarama = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
+        foreach ($tarama as $dosya) {
+            $yol = str_replace('\\', '/', $dosya->getPathname());
+            if (substr($yol, -4) !== '.php') { continue; }
+            if (strpos($yol, '/tests/') !== false) { continue; }
+            $src = (string)file_get_contents($yol);
+            $desenler = [
+                "/require_can\(\s*'([a-z_]+\.[a-z_]+)'/",
+                "/'perm'\s*=>\s*'([a-z_]+\.[a-z_]+)'/",
+                "/\bcan\(\s*\\\$[a-zA-Z_]+\s*,\s*'([a-z_]+\.[a-z_]+)'/",
+                "/\bcan\(\s*[a-z_]+\([^)]*\)\s*,\s*'([a-z_]+\.[a-z_]+)'/",
+            ];
+            foreach ($desenler as $d) {
+                if (preg_match_all($d, $src, $m)) {
+                    $kullanilan = array_merge($kullanilan, $m[1]);
+                }
+            }
+        }
+        // admin.access ve public kapı değil, çatı kavramlarıdır.
+        $muaf = ['admin.access'];
+        $olu = array_values(array_diff($tanimli, array_unique($kullanilan), $muaf));
+        sort($olu);
+        echo implode(',', $olu);
+        break;
     // Oturum parola özetine bağlı mı? Yanlış damgayla oturum ölmeli (B04).
     case 'pw_stamp_binds':
         if (!function_exists('session_pw_stamp') || !function_exists('session_bind_user')) {

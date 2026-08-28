@@ -18,13 +18,21 @@ $srcset = post_image_srcset($post);
 $sizes = $boyut === 'buyuk' ? '(max-width:700px) 100vw, 720px' : '(max-width:700px) 100vw, 380px';
 $kat = (string)arr($post, 'category_color', '');
 $sira = isset($sira) ? (int)$sira : 0;
+// LCP adayı: büyük kart ya da sıralı listenin ilk öğesi ekranın üstünde açılır.
+$onceki = ($boyut === 'buyuk' || $sira === 1);
+$webp = $img ? post_image_webp_srcset($post) : '';
 ?>
 <article class="kart kart-<?= esc($boyut) ?><?= $sira > 0 ? " kart-sirali" : "" ?><?= $img ? '' : ' kart-gorselsiz' ?>">
   <a class="kart-bag" href="<?= esc(url_post($post)) ?>">
     <?php if ($img): ?>
       <div class="kart-gorsel">
-        <img src="<?= esc($img) ?>"<?= $srcset ? ' srcset="' . esc($srcset) . '" sizes="' . esc($sizes) . '"' : '' ?>
-             alt="<?= esc($post['title']) ?>" loading="lazy" decoding="async">
+        <picture>
+          <?php if ($webp !== ''): ?>
+            <source type="image/webp" srcset="<?= esc($webp) ?>" sizes="<?= esc($sizes) ?>">
+          <?php endif; ?>
+          <img src="<?= esc($img) ?>"<?= $srcset ? ' srcset="' . esc($srcset) . '" sizes="' . esc($sizes) . '"' : '' ?>
+               alt="<?= esc($post['title']) ?>" <?= post_image_attrs($post, $gorselBoy[$boyut], $onceki) ?>>
+        </picture>
         <?php if (!empty($post['type']) && $post['type'] === 'video'): ?>
           <span class="kart-video" aria-hidden="true">▶</span>
         <?php endif; ?>

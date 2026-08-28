@@ -641,7 +641,11 @@ function member_bookmark_toggle($userId, $postId) {
     if ($userId <= 0 || $postId <= 0) { return member_error('Geçersiz istek.'); }
     if (!member_tables_ready()) { return member_error('Üyelik tabloları kurulmadı.', 503); }
 
-    $post = q1('SELECT id, title FROM posts WHERE id = :i', [':i' => $postId]);
+    // Yalnız ÖN YÜZDE GÖRÜNEN haber kaydedilebilir (denetim turu 3, B02).
+    // Eskiden yalnız "kayıt var mı" soruluyordu: taslak, arşiv ve ÇÖP KUTUSUNDAKİ
+    // haberler kabul ediliyor, üstelik id taramasıyla varlık kâhini oluyordu.
+    $post = q1('SELECT id, title FROM posts p WHERE p.id = :i AND ' . published_where('p'),
+        [':i' => $postId, ':nowts' => now()]);
     if (!$post) { return member_error('Haber bulunamadı.', 404); }
 
     try {
@@ -673,6 +677,11 @@ function member_bookmarks($userId, $limit = 20, $offset = 0) {
             LEFT JOIN categories c ON c.id = p.category_id
             WHERE b.user_id = :u
               AND p.status = \'published\' AND (p.published_at IS NULL OR p.published_at <= :nowts)
+              -- COP KUTUSU (denetim turu 3, B02): burada published_where()
+              -- kullanilmadigi icin yumusak silme kapisi ELLE eklenmek zorunda.
+              -- Yoksa silinen haber /hesap?s=kaydedilenler ve members.bookmarks
+              -- ucunda baslik+spot+URL olarak donuyordu.
+              AND (p.deleted_at IS NULL OR p.deleted_at = \'\')
             ORDER BY b.id DESC LIMIT ' . $limit . ' OFFSET ' . $offset,
             [':u' => $userId, ':nowts' => now()]);
     } catch (Throwable $e) { return []; }

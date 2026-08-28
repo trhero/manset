@@ -10,6 +10,8 @@
  *   · posts.edit_any yoksa yalnız kendi haberleri listelenir/düzenlenir.
  *   · posts.publish yoksa yayın/zamanlama seçilemez, kayıt 'pending' olur.
  *   · posts.delete yoksa silme düğmesi görünmez.
+ *   · 1.1-09 — silme yumuşaktır. Liste çöptekileri göstermez; ?durum=cop çöp kutusudur.
+ *     Kalıcı silme yalnız admin rolüne görünür (uç: posts.purge).
  */
 if (!defined('MANSET_BOOTSTRAPPED')) { exit; }
 require_can('posts.view');
@@ -21,9 +23,22 @@ $hepsiniDuzenle = can($me, 'posts.edit_any');
 $yayinlayabilir = can($me, 'posts.publish');
 $silebilir      = can($me, 'posts.delete');
 $olusturabilir  = can($me, 'posts.create');
+// Kalıcı silme rol kapısı — inc/api/admin.php posts.purge ucundaki kuralın aynısı.
+$kaliciSilebilir = $silebilir && (string)arr($me, 'role', '') === 'admin';
+$copVar          = function_exists('published_supports_trash') && published_supports_trash();
+
+// 1.1-02 — kataloğa yazılıp hiçbir kapıya bağlanmamış izinler burada bağlanıyor.
+$telDuzenler   = can($me, 'posts.edit_wire');   // ajans/YZ kaynaklı haberler
+$ustveriKipi   = can($me, 'posts.seo') && !$hepsiniDuzenle && !can($me, 'posts.edit_own');
+$yayindanCeker = can($me, 'posts.takedown');
 
 $editId = inp_i('duzenle', 0);
 $yeni   = inp_i('yeni', 0) === 1;
+
+/** Haber ajans/YZ kaynaklı mı? (inc/api/admin.php · api_admin_is_wire_post ile aynı ölçüt) */
+$telHaberMi = function ($p) {
+    return (int)arr($p, 'ai_generated', 0) === 1 || trim((string)arr($p, 'source_url', '')) !== '';
+};
 
 // ---------------------------------------------------------------- editör kipi verisi
 $post = null;
@@ -34,7 +49,12 @@ if ($editId > 0) {
         header('Location: ' . admin_url('posts'), true, 302);
         exit;
     }
-    if (!$hepsiniDuzenle && (int)$post['author_id'] !== (int)$me['id']) {
+    // Kapı sunucu tarafındaki api_admin_load_post() ile aynı: sahiplik YA DA
+    // ajans/YZ kaynağı (posts.edit_wire) YA DA üstveri kipi (posts.seo).
+    if (!$hepsiniDuzenle
+        && (int)$post['author_id'] !== (int)$me['id']
+        && !($telDuzenler && $telHaberMi($post))
+        && !$ustveriKipi) {
         flash('err', 'Yalnız kendi haberlerinizi düzenleyebilirsiniz.');
         header('Location: ' . admin_url('posts'), true, 302);
         exit;
@@ -79,10 +99,33 @@ $durumSecenek = [
     'published' => 'Yayında', 'archived' => 'Arşiv',
 ];
 
+// ?durum=cop → çöp kutusu kipi. 'cop' bir status değeri DEĞİL, ayrı bir görünüm.
+$copKip = ($copVar && $fDurum === 'cop');
+
 $where = ['1 = 1'];
 $prm = [];
-if (!$hepsiniDuzenle) { $where[] = 'p.author_id = :me'; $prm[':me'] = (int)$me['id']; }
-if ($fDurum !== '' && isset($durumSecenek[$fDurum])) { $where[] = 'p.status = :st'; $prm[':st'] = $fDurum; }
+if (!$hepsiniDuzenle) {
+    // Otomasyon editörü (posts.edit_wire) kendi haberlerinin YANINDA ajans/YZ kaynaklı
+    // haberleri de görür: AI ve RSS taslaklarının yazarı daima ilk yönetici yazılıyor,
+    // yoksa kendi iş kolunun çıktısı listesine hiç düşmüyordu. SEO editörü (üstveri
+    // kipi) ise üstveriyi düzenlemek için tüm haberleri görmek zorunda.
+    if ($ustveriKipi) {
+        // süzgeç yok — yalnız üstveri düzenlenebildiği için tüm liste görünür
+    } elseif ($telDuzenler) {
+        $where[] = '(p.author_id = :me OR p.ai_generated = 1 OR p.source_url <> :bosKaynak)';
+        $prm[':me'] = (int)$me['id'];
+        $prm[':bosKaynak'] = '';
+    } else {
+        $where[] = 'p.author_id = :me';
+        $prm[':me'] = (int)$me['id'];
+    }
+}
+if ($copVar) {
+    // Panel listesinde çöp görünmez; çöp kutusunda ise YALNIZ çöp görünür.
+    $where[] = $copKip ? 'p.deleted_at <> :bos' : 'p.deleted_at = :bos';
+    $prm[':bos'] = '';
+}
+if (!$copKip && $fDurum !== '' && isset($durumSecenek[$fDurum])) { $where[] = 'p.status = :st'; $prm[':st'] = $fDurum; }
 if ($fKat > 0)   { $where[] = 'p.category_id = :cid'; $prm[':cid'] = $fKat; }
 if ($fYazar > 0 && $hepsiniDuzenle) { $where[] = 'p.author_id = :aid'; $prm[':aid'] = $fYazar; }
 if ($fYz)        { $where[] = 'p.ai_generated = 1'; }
@@ -93,8 +136,19 @@ if ($fArama !== '') {
 $sqlWhere = ' WHERE ' . implode(' AND ', $where);
 
 $toplam = (int)qv('SELECT COUNT(*) FROM posts p' . $sqlWhere, $prm, 0);
+
+// Çöp sekmesi rozeti — kendi haberleriyle sınırlı kullanıcıda yalnız kendi çöpü sayılır.
+$copSayi = 0;
+if ($copVar) {
+    $copWhere = 'WHERE p.deleted_at <> :bos';
+    $copPrm = [':bos' => ''];
+    if (!$hepsiniDuzenle) { $copWhere .= ' AND p.author_id = :me'; $copPrm[':me'] = (int)$me['id']; }
+    $copSayi = (int)qv('SELECT COUNT(*) FROM posts p ' . $copWhere, $copPrm, 0);
+}
+$copSutun = $copVar ? ' p.deleted_at,' : '';
+
 $haberler = qa('SELECT p.id, p.title, p.slug, p.status, p.type, p.image, p.category_id, p.author_id,
-        p.ai_generated, p.view_count, p.published_at, p.created_at, p.is_headline,
+        p.ai_generated, p.view_count, p.published_at, p.created_at, p.is_headline,' . $copSutun . '
         c.name AS category_name, c.color AS category_color, u.name AS author_name
     FROM posts p
     LEFT JOIN categories c ON c.id = p.category_id
@@ -115,15 +169,39 @@ $filtreQuery = array_filter([
 ?>
 
 <div class="sayfa-basligi">
-  <h1>Haberler <span class="soluk kucuk">(<?= (int)$toplam ?>)</span></h1>
-  <?php if ($olusturabilir): ?>
+  <h1><?= $copKip ? 'Çöp kutusu' : 'Haberler' ?> <span class="soluk kucuk">(<?= (int)$toplam ?>)</span></h1>
+  <?php if ($olusturabilir && !$copKip): ?>
     <a class="dugme birincil" href="<?= esc(admin_url('posts', ['yeni' => 1])) ?>">+ Yeni haber</a>
   <?php endif; ?>
 </div>
 
+<?php if ($copVar): ?>
+  <div class="sekmeler" aria-label="Liste görünümü">
+    <a class="<?= $copKip ? '' : 'etkin' ?>" href="<?= esc(admin_url('posts')) ?>"
+       <?= $copKip ? '' : 'aria-current="page"' ?>>Haberler</a>
+    <a class="<?= $copKip ? 'etkin' : '' ?>" href="<?= esc(admin_url('posts', ['durum' => 'cop'])) ?>"
+       <?= $copKip ? 'aria-current="page"' : '' ?>>Çöp <span class="sekme-sayi"><?= (int)$copSayi ?></span></a>
+  </div>
+<?php endif; ?>
+
+<?php if ($copKip): ?>
+  <div class="uyari bilgi mini">
+    Silinen haberler burada bekler; ön yüzde görünmezler. <strong>Geri al</strong> ile eski hâline döner.
+    <?php if ($kaliciSilebilir): ?>
+      <strong>Kalıcı sil</strong> haberi yorumlarıyla birlikte geri dönüşsüz siler.
+    <?php else: ?>
+      Kalıcı silme yalnız yöneticide.
+    <?php endif; ?>
+  </div>
+<?php endif; ?>
+
 <form class="arac-cubugu" method="get" action="<?= esc(base_url()) ?>/admin/">
   <input type="hidden" name="p" value="posts">
-  <select name="durum" aria-label="Durum"><?= admin_options($durumSecenek, $fDurum, 'Tüm durumlar') ?></select>
+  <?php if ($copKip): ?>
+    <input type="hidden" name="durum" value="cop">
+  <?php else: ?>
+    <select name="durum" aria-label="Durum"><?= admin_options($durumSecenek, $fDurum, 'Tüm durumlar') ?></select>
+  <?php endif; ?>
   <select name="kategori" aria-label="Kategori"><?= admin_options($kategoriSecenek, $fKat, 'Tüm kategoriler') ?></select>
   <?php if ($hepsiniDuzenle && $yazarSecenek): ?>
     <select name="yazar" aria-label="Yazar"><?= admin_options($yazarSecenek, $fYazar, 'Tüm yazarlar') ?></select>
@@ -141,16 +219,17 @@ $filtreQuery = array_filter([
 
 <?php if (!$haberler): ?>
   <div class="bos-durum">
-    <span class="buyuk" aria-hidden="true">✎</span>
-    <h3><?= $filtreQuery ? 'Filtreye uyan haber yok' : 'Henüz haber yok' ?></h3>
-    <p><?= $filtreQuery ? 'Filtreleri sıfırlayıp tekrar deneyin.' : 'İlk haberinizi oluşturun.' ?></p>
-    <?php if ($olusturabilir): ?>
+    <span class="buyuk" aria-hidden="true"><?= $copKip ? '🗑' : '✎' ?></span>
+    <h3><?= $copKip ? 'Çöp kutusu boş' : ($filtreQuery ? 'Filtreye uyan haber yok' : 'Henüz haber yok') ?></h3>
+    <p><?= $copKip ? 'Silinen haberler burada görünür.'
+                   : ($filtreQuery ? 'Filtreleri sıfırlayıp tekrar deneyin.' : 'İlk haberinizi oluşturun.') ?></p>
+    <?php if ($olusturabilir && !$copKip): ?>
       <a class="dugme birincil" href="<?= esc(admin_url('posts', ['yeni' => 1])) ?>">+ Yeni haber</a>
     <?php endif; ?>
   </div>
 <?php else: ?>
 
-  <?php if ($hepsiniDuzenle): ?>
+  <?php if ($hepsiniDuzenle && !$copKip): ?>
     <div class="arac-cubugu">
       <label class="onay-satir" style="margin:0">
         <input type="checkbox" id="tumunuSec" aria-label="Tümünü seç">
@@ -172,7 +251,7 @@ $filtreQuery = array_filter([
     <table class="tablo">
       <thead>
         <tr>
-          <?php if ($hepsiniDuzenle): ?><th class="dar"><span class="gizli">Seç</span></th><?php endif; ?>
+          <?php if ($hepsiniDuzenle && !$copKip): ?><th class="dar"><span class="gizli">Seç</span></th><?php endif; ?>
           <th class="dar"><span class="gizli">Görsel</span></th>
           <th>Başlık</th>
           <th class="dar">Kategori</th>
@@ -187,7 +266,7 @@ $filtreQuery = array_filter([
         <?php foreach ($haberler as $h):
           list($etiket, $ton) = admin_status_label((string)$h['status']); ?>
           <tr>
-            <?php if ($hepsiniDuzenle): ?>
+            <?php if ($hepsiniDuzenle && !$copKip): ?>
               <td class="dar"><input type="checkbox" class="haber-sec" value="<?= (int)$h['id'] ?>"
                                      aria-label="<?= esc($h['title']) ?> seç"></td>
             <?php endif; ?>
@@ -213,13 +292,25 @@ $filtreQuery = array_filter([
             </td>
             <td class="dar"><?= number_format((int)$h['view_count'], 0, ',', '.') ?></td>
             <td class="islem">
-              <?php if ($h['status'] === 'published'): ?>
-                <a class="dugme kucuk" href="<?= esc(url_post($h)) ?>" target="_blank" rel="noopener" title="Ön yüzde aç">↗</a>
-              <?php endif; ?>
-              <a class="dugme kucuk" href="<?= esc(admin_url('posts', ['duzenle' => (int)$h['id']])) ?>">Düzenle</a>
-              <?php if ($silebilir): ?>
-                <button type="button" class="dugme kucuk tehlike" data-haber-sil="<?= (int)$h['id'] ?>"
-                        data-onay="<?= esc($h['title']) ?> kalıcı olarak silinecek (yorumlarıyla birlikte). Onaylıyor musunuz?">Sil</button>
+              <?php if ($copKip): ?>
+                <button type="button" class="dugme kucuk" data-haber-geri="<?= (int)$h['id'] ?>">Geri al</button>
+                <?php if ($kaliciSilebilir): ?>
+                  <button type="button" class="dugme kucuk tehlike" data-haber-yoket="<?= (int)$h['id'] ?>"
+                          data-onay="“<?= esc($h['title']) ?>” KALICI olarak silinecek (yorumlarıyla birlikte). Bu işlem geri alınamaz. Onaylıyor musunuz?">Kalıcı sil</button>
+                <?php endif; ?>
+              <?php else: ?>
+                <?php if ($h['status'] === 'published'): ?>
+                  <a class="dugme kucuk" href="<?= esc(url_post($h)) ?>" target="_blank" rel="noopener" title="Ön yüzde aç">↗</a>
+                <?php endif; ?>
+                <a class="dugme kucuk" href="<?= esc(admin_url('posts', ['duzenle' => (int)$h['id']])) ?>"><?= $ustveriKipi ? 'Üstveri' : 'Düzenle' ?></a>
+                <?php if ($yayindanCeker && $h['status'] === 'published'): ?>
+                  <button type="button" class="dugme kucuk" data-haber-kaldir="<?= (int)$h['id'] ?>"
+                          data-onay="“<?= esc($h['title']) ?>” yayından kaldırılacak (arşive alınır, silinmez). Onaylıyor musunuz?">Yayından kaldır</button>
+                <?php endif; ?>
+                <?php if ($silebilir): ?>
+                  <button type="button" class="dugme kucuk tehlike" data-haber-sil="<?= (int)$h['id'] ?>"
+                          data-onay="“<?= esc($h['title']) ?>” çöp kutusuna taşınacak. Onaylıyor musunuz?">Sil</button>
+                <?php endif; ?>
               <?php endif; ?>
             </td>
           </tr>
@@ -264,15 +355,22 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  M.qsa('[data-haber-sil]').forEach(function (b) {
-    b.addEventListener('click', function () {
-      b.disabled = true;
-      M.api('posts.delete', { id: parseInt(b.getAttribute('data-haber-sil'), 10) }).then(function (r) {
-        if (M.sonuc(r, 'Haber silindi.')) { setTimeout(function () { location.reload(); }, 450); }
-        else { b.disabled = false; }
+  /* Çöp kutusu işlemleri — onay diyalogu admin.js'teki data-onay kancasından gelir. */
+  function satirIslemi(nitelik, uc, mesaj) {
+    M.qsa('[' + nitelik + ']').forEach(function (b) {
+      b.addEventListener('click', function () {
+        b.disabled = true;
+        M.api(uc, { id: parseInt(b.getAttribute(nitelik), 10) }).then(function (r) {
+          if (M.sonuc(r, mesaj)) { setTimeout(function () { location.reload(); }, 450); }
+          else { b.disabled = false; }
+        });
       });
     });
-  });
+  }
+  satirIslemi('data-haber-sil', 'posts.delete', 'Haber çöp kutusuna taşındı.');
+  satirIslemi('data-haber-geri', 'posts.restore', 'Haber geri alındı.');
+  satirIslemi('data-haber-yoket', 'posts.purge', 'Haber kalıcı olarak silindi.');
+  satirIslemi('data-haber-kaldir', 'posts.takedown', 'Haber yayından kaldırıldı.');
 });
 </script>
 
@@ -308,15 +406,25 @@ $gorsel = $v('image');
     <?php if ($post): ?>
       <a class="dugme" id="onYuzBag" href="<?= esc(url_post($post)) ?>" target="_blank" rel="noopener">Ön yüzde gör ↗</a>
     <?php endif; ?>
+    <?php if ($post && $yayindanCeker && (string)$post['status'] === 'published'): ?>
+      <button type="button" class="dugme" data-haber-kaldir="<?= (int)$post['id'] ?>"
+              data-onay="“<?= esc($post['title']) ?>” yayından kaldırılacak (arşive alınır, silinmez). Onaylıyor musunuz?">Yayından kaldır</button>
+    <?php endif; ?>
     <?php if ($post && $silebilir): ?>
       <button type="button" class="dugme tehlike" data-haber-sil="<?= (int)$post['id'] ?>"
-              data-onay="<?= esc($post['title']) ?> kalıcı olarak silinecek. Onaylıyor musunuz?">Sil</button>
+              data-onay="“<?= esc($post['title']) ?>” çöp kutusuna taşınacak. Onaylıyor musunuz?">Sil</button>
     <?php endif; ?>
-    <button type="submit" form="haberForm" class="dugme birincil">Kaydet</button>
+    <button type="submit" form="haberForm" class="dugme birincil"><?= $ustveriKipi ? 'Üstveriyi kaydet' : 'Kaydet' ?></button>
   </div>
 </div>
 
-<?php if (!$yayinlayabilir): ?>
+<?php if ($ustveriKipi): ?>
+  <div class="uyari warn mini">
+    <strong>Üstveri kipi.</strong> Bu ekranda yalnız adres, görsel, etiket ve SEO alanlarını
+    düzenleyebilirsiniz. Başlık, spot, haber metni ve yayın durumu <strong>kilitlidir</strong> —
+    kaydettiğinizde değişmez.
+  </div>
+<?php elseif (!$yayinlayabilir): ?>
   <div class="uyari bilgi mini">
     Yayımlama yetkiniz yok. Kaydettiğiniz haber <strong>onay kuyruğuna</strong> düşer; bir editör yayımlar.
   </div>
@@ -331,7 +439,7 @@ $gorsel = $v('image');
       <div class="form-alan">
         <label for="h_title">Başlık</label>
         <input type="text" id="h_title" name="title" required maxlength="255" value="<?= esc($v('title')) ?>"
-               placeholder="Haberin başlığı">
+               placeholder="Haberin başlığı"<?= $ustveriKipi ? ' readonly' : '' ?>>
       </div>
 
       <div class="form-alan">
@@ -346,15 +454,15 @@ $gorsel = $v('image');
 
       <div class="form-alan">
         <label for="h_spot">Spot</label>
-        <textarea id="h_spot" name="spot" rows="3" maxlength="300"
+        <textarea id="h_spot" name="spot" rows="3" maxlength="300"<?= $ustveriKipi ? ' readonly' : '' ?>
                   placeholder="Haberin özeti — liste ve kartlarda görünür."><?= esc($v('spot')) ?></textarea>
         <div class="sayac-metin"><span id="spotSayac">0</span> / 300</div>
       </div>
     </div>
 
-    <div class="kart">
-      <div class="kart-baslik">Haber metni</div>
-      <textarea id="h_body" name="body" rows="18"><?= esc($v('body')) ?></textarea>
+    <div class="kart<?= $ustveriKipi ? ' ustveri-kilit' : '' ?>">
+      <div class="kart-baslik">Haber metni <?= $ustveriKipi ? '<span class="soluk kucuk">· kilitli</span>' : '' ?></div>
+      <textarea id="h_body" name="body" rows="18"<?= $ustveriKipi ? ' readonly' : '' ?>><?= esc($v('body')) ?></textarea>
     </div>
 
     <div class="kart">
@@ -380,21 +488,21 @@ $gorsel = $v('image');
       <div class="kart-baslik">Yayın</div>
       <div class="form-alan">
         <label for="h_status">Durum</label>
-        <select id="h_status" name="status"><?= admin_options($durumSecenekleri, $durumMevcut) ?></select>
+        <select id="h_status" name="status"<?= $ustveriKipi ? ' disabled' : '' ?>><?= admin_options($durumSecenekleri, $durumMevcut) ?></select>
       </div>
       <div class="form-alan" id="tarihAlani">
         <label for="h_published_at">Yayın tarihi</label>
-        <input type="datetime-local" id="h_published_at" name="published_at" value="<?= esc($yayinTarihiLocal) ?>">
+        <input type="datetime-local" id="h_published_at" name="published_at" value="<?= esc($yayinTarihiLocal) ?>"<?= $ustveriKipi ? ' disabled' : '' ?>>
         <span class="form-yardim">“Zamanla” seçilirse gelecekte bir tarih girin; cron zamanı gelince yayımlar.</span>
       </div>
       <div class="form-alan">
         <label for="h_type">Tür</label>
-        <select id="h_type" name="type"><?= admin_options($turler, $v('type', 'haber')) ?></select>
+        <select id="h_type" name="type"<?= $ustveriKipi ? ' disabled' : '' ?>><?= admin_options($turler, $v('type', 'haber')) ?></select>
       </div>
       <?php if (function_exists('post_visibility_levels')): ?>
       <div class="form-alan">
         <label for="h_visibility">Kimler okuyabilir</label>
-        <select id="h_visibility" name="visibility"><?= admin_options([
+        <select id="h_visibility" name="visibility"<?= $ustveriKipi ? ' disabled' : '' ?>><?= admin_options([
           'public'  => 'Herkes',
           'members' => 'Yalnız üyeler',
           'premium' => 'Yalnız aboneler',
@@ -404,14 +512,14 @@ $gorsel = $v('image');
       </div>
       <div class="form-alan" id="teaserAlani"<?= $v('visibility', 'public') === 'public' ? ' hidden' : '' ?>>
         <label for="h_teaser">Önizleme metni</label>
-        <textarea id="h_teaser" name="teaser" rows="3" maxlength="600"><?= esc($v('teaser', '')) ?></textarea>
+        <textarea id="h_teaser" name="teaser" rows="3" maxlength="600"<?= $ustveriKipi ? ' readonly' : '' ?>><?= esc($v('teaser', '')) ?></textarea>
         <span class="form-yardim">Boş bırakılırsa gövdenin ilk paragrafı kullanılır.
           Arama motorlarına da bu metin gider.</span>
       </div>
       <?php endif; ?>
       <div class="form-alan">
         <label for="h_category">Kategori</label>
-        <select id="h_category" name="category_id"><?= admin_options($kategoriSecenek, (int)$v('category_id', '0'), 'Kategorisiz') ?></select>
+        <select id="h_category" name="category_id"<?= $ustveriKipi ? ' disabled' : '' ?>><?= admin_options($kategoriSecenek, (int)$v('category_id', '0'), 'Kategorisiz') ?></select>
         <?php if (!$kategoriSecenek && can($me, 'categories.manage')): ?>
           <span class="form-yardim">Henüz kategori yok — <a href="<?= esc(admin_url('categories')) ?>">kategori ekleyin</a>.</span>
         <?php endif; ?>
@@ -472,8 +580,10 @@ $gorsel = $v('image');
     <div class="kart">
       <div class="kart-baslik">Yapay zekâ yardımcıları</div>
       <div class="dugme-grup">
-        <button type="button" class="dugme kucuk" id="yzBaslik">Başlık öner</button>
-        <button type="button" class="dugme kucuk" id="yzSpot">Spot öner</button>
+        <?php if (!$ustveriKipi): ?>
+          <button type="button" class="dugme kucuk" id="yzBaslik">Başlık öner</button>
+          <button type="button" class="dugme kucuk" id="yzSpot">Spot öner</button>
+        <?php endif; ?>
         <button type="button" class="dugme kucuk" id="yzSeo">SEO doldur</button>
       </div>
       <span class="form-yardim">Yapay zekâ kapalıysa düğmeler uyarı gösterir; haber akışı etkilenmez.</span>
@@ -488,7 +598,27 @@ document.addEventListener('DOMContentLoaded', function () {
   var duzenleSablon = <?= json_encode(admin_url('posts', ['duzenle' => '__ID__'])) ?>;
   var yuklemeKok = (window.MANSET && MANSET.uploads) || '';
 
-  var editor = window.MansetEditor
+  // Üstveri kipinde (posts.seo) gövde kilitlidir: zengin editör hiç bağlanmaz,
+  // yoksa contenteditable alan readonly textarea'nın kilidini fiilen deler.
+  var ustveriKipi = <?= $ustveriKipi ? 'true' : 'false' ?>;
+
+  /* NEDEN (denetim 3 · cop-izin B08): posts.save üstveri kipinde GÖNDERİLMEYEN
+     alanları boşaltıyor (seo_title/seo_desc/tags için sunucuda yedek yok) ve boş
+     `slug` gelince adresi başlıktan YENİDEN üretip slug_history'ye yeni bir 301
+     halkası ekliyor. Bu yüzden arayüz, kısmi gönderim yapmayacağına dair güvenceyi
+     kendi tarafında verir: aşağıdaki sunucu üretimi yedek, isteğe her seferinde
+     TÜM üstveri alanlarının bir değerle gitmesini sağlar (alan silinmiş, boş
+     bırakılmış ya da devre dışı olsa bile mevcut değer taşınır).
+     Slug'ı elle boşaltıp başlıktan yeniden üretmek isteyen editör ↻ düğmesini
+     kullanır — sessiz yeniden üretim böylece kazayla olmaz. */
+  var ustveriYedek = <?= json_encode([
+      'slug'      => $v('slug'),
+      'tags'      => $v('tags'),
+      'image'     => $gorsel,
+      'seo_title' => $v('seo_title'),
+      'seo_desc'  => $v('seo_desc'),
+  ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+  var editor = (window.MansetEditor && !ustveriKipi)
     ? MansetEditor.baglat(document.getElementById('h_body'), { bos: 'Haber metnini buraya yazın…' })
     : null;
   var kirli = M.kirliTakip(form);
@@ -644,13 +774,31 @@ document.addEventListener('DOMContentLoaded', function () {
     v.category_id = parseInt(v.category_id, 10) || 0;
     v.body = editor ? editor.html() : document.getElementById('h_body').value;
     v.published_at = M.dtSql(v.published_at || '');
+    if (ustveriKipi) {
+      // Sunucu da yok sayıyor (api_admin_metadata_only); burada hiç göndermiyoruz ki
+      // kilitli alanların değişmeyeceği istekten de okunabilsin.
+      ['title', 'spot', 'body', 'status', 'published_at', 'type', 'category_id', 'visibility', 'teaser']
+        .forEach(function (ad) { delete v[ad]; });
+    }
+
+    /* B08 — üstveri alanları HER istekte tam gitsin. Eksik/boş alan sunucuda
+       "boşalt" olarak okunuyor; slug için boş değer "başlıktan yeniden üret"
+       anlamına geliyor. Mevcut haberde (id > 0) yedek değerleri geri koyuyoruz.
+       Yeni haberde (id = 0) yedek zaten boştur, davranış değişmez. */
+    if (v.id > 0) {
+      ['slug', 'tags', 'image', 'seo_title', 'seo_desc'].forEach(function (ad) {
+        if (v[ad] === undefined || v[ad] === null) { v[ad] = ustveriYedek[ad] || ''; }
+      });
+      // Slug'ın boşa düşmesi = sunucuda başlıktan yeniden üretim; mevcut adresi koru.
+      if (String(v.slug || '').trim() === '') { v.slug = ustveriYedek.slug || ''; }
+    }
     return v;
   }
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var v = verileriTopla();
-    if (!String(v.title || '').trim()) { M.toast('err', 'Başlık zorunlu.'); elTitle.focus(); return; }
+    if (!ustveriKipi && !String(v.title || '').trim()) { M.toast('err', 'Başlık zorunlu.'); elTitle.focus(); return; }
 
     var kaydetDugmeleri = M.qsa('button[type=submit]');
     kaydetDugmeleri.forEach(function (b) { b.disabled = true; });
@@ -675,10 +823,23 @@ document.addEventListener('DOMContentLoaded', function () {
   M.qsa('[data-haber-sil]').forEach(function (b) {
     b.addEventListener('click', function () {
       M.api('posts.delete', { id: parseInt(b.getAttribute('data-haber-sil'), 10) }).then(function (r) {
-        if (M.sonuc(r, 'Haber silindi.')) {
+        if (M.sonuc(r, 'Haber çöp kutusuna taşındı.')) {
           kirli.temizle();
           setTimeout(function () { location.href = listeAdres; }, 500);
         }
+      });
+    });
+  });
+
+  /* Yayından kaldır (posts.takedown) — metne dokunmaz, haberi arşive alır. */
+  M.qsa('[data-haber-kaldir]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      b.disabled = true;
+      M.api('posts.takedown', { id: parseInt(b.getAttribute('data-haber-kaldir'), 10) }).then(function (r) {
+        if (M.sonuc(r, 'Haber yayından kaldırıldı.')) {
+          kirli.temizle();
+          setTimeout(function () { location.reload(); }, 500);
+        } else { b.disabled = false; }
       });
     });
   });
@@ -705,7 +866,8 @@ document.addEventListener('DOMContentLoaded', function () {
       });
   }
 
-  document.getElementById('yzBaslik').addEventListener('click', function () {
+  var yzBaslikDugme = document.getElementById('yzBaslik');
+  if (yzBaslikDugme) { yzBaslikDugme.addEventListener('click', function () {
     var d = this;
     yzCagir(d, 'ai.suggest_title', function (r) {
       var liste = (r.items || []);
@@ -726,9 +888,10 @@ document.addEventListener('DOMContentLoaded', function () {
         });
       });
     });
-  });
+  }); }
 
-  document.getElementById('yzSpot').addEventListener('click', function () {
+  var yzSpotDugme = document.getElementById('yzSpot');
+  if (yzSpotDugme) { yzSpotDugme.addEventListener('click', function () {
     var d = this;
     yzCagir(d, 'ai.suggest_spot', function (r) {
       if (!r.spot) { M.toast('warn', 'Spot üretilemedi.'); return; }
@@ -736,7 +899,7 @@ document.addEventListener('DOMContentLoaded', function () {
       seoGuncelle();
       M.toast('ok', 'Spot alanı dolduruldu.');
     });
-  });
+  }); }
 
   document.getElementById('yzSeo').addEventListener('click', function () {
     var d = this;

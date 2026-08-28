@@ -303,7 +303,24 @@ function category_by_id($id) {
 
 /** Yayındaki haberler için ortak WHERE parçası. */
 function published_where($alias = 'p') {
-    return $alias . ".status = 'published' AND (" . $alias . '.published_at IS NULL OR ' . $alias . '.published_at <= :nowts)';
+    // Çöp kutusundaki haber ön yüzde HİÇBİR yerde görünmez (1.1 yumuşak silme).
+    // deleted_at boş dize = silinmemiş. Sütun yoksa (göç uygulanmamışsa)
+    // koşul atlanır — eski kurulum bozulmasın.
+    $silme = published_supports_trash() ? ' AND ' . $alias . ".deleted_at = ''" : '';
+    return $alias . ".status = 'published' AND (" . $alias . '.published_at IS NULL OR '
+         . $alias . '.published_at <= :nowts)' . $silme;
+}
+
+/** `posts.deleted_at` sütunu var mı? (bir kez sorulur, istek boyunca saklanır) */
+function published_supports_trash() {
+    static $var = null;
+    if ($var !== null) { return $var; }
+    if (!function_exists('schema_has_column')) {
+        try { qv('SELECT deleted_at FROM posts LIMIT 1'); $var = true; }
+        catch (Throwable $e) { $var = false; }
+        return $var;
+    }
+    return $var = schema_has_column('posts', 'deleted_at');
 }
 
 /** Haber listesi sorgusu için ortak SELECT. */
@@ -571,6 +588,78 @@ function post_image($post, $size = 'medium') {
     return url_upload($file);
 }
 
+/**
+ * Görsel etiketi için tam öznitelik kümesi.
+ *
+ * İKİ AYRI HATAYI BİRDEN KAPATIR:
+ *
+ * 1) LCP: 1.0'da manşetin ilk büyük kartı ve haber sayfasının ana görseli de
+ *    `loading="lazy"` idi (themes/gazete/single.php, parts/card.php). Ekranın
+ *    en üstündeki görseli tembel yüklemek, tarayıcının onu geç keşfetmesine yol
+ *    açar; Largest Contentful Paint doğrudan cezalanır ve bu Google Haberler
+ *    sıralamasında bir sinyaldir. Sayfanın ilk görseli EAGER olmalıdır.
+ *
+ * 2) CLS: genişlik/yükseklik verilmediği için görsel yüklenince metin zıplıyordu.
+ *    Varyant genişlikleri sabit (400/800/1280), yükseklik orandan hesaplanır.
+ *
+ * @param array  $post
+ * @param string $size  thumb|medium|large|orig
+ * @param bool   $eager Sayfanın LCP adayı mı? (manşetin ilk kartı, haber ana görseli)
+ * @return string Kaçırılmış öznitelik dizesi; doğrudan <img …> içine basılır.
+ */
+function post_image_attrs($post, $size = 'medium', $eager = false) {
+    $genislikler = ['thumb' => 400, 'medium' => 800, 'large' => 1280];
+    $w = isset($genislikler[$size]) ? $genislikler[$size] : 0;
+
+    $parcalar = [];
+    if ($w > 0) {
+        // Oran: medya kaydından gelirse gerçek oran, yoksa 16/9 varsayılır.
+        $oran = 9 / 16;
+        $mw = (int)arr($post, 'image_width', 0);
+        $mh = (int)arr($post, 'image_height', 0);
+        if ($mw > 0 && $mh > 0) { $oran = $mh / $mw; }
+        $parcalar[] = 'width="' . $w . '"';
+        $parcalar[] = 'height="' . (int)round($w * $oran) . '"';
+    }
+    if ($eager) {
+        // fetchpriority: tarayıcıya "bu görsel her şeyden önce" der.
+        $parcalar[] = 'loading="eager"';
+        $parcalar[] = 'fetchpriority="high"';
+        $parcalar[] = 'decoding="async"';
+    } else {
+        $parcalar[] = 'loading="lazy"';
+        $parcalar[] = 'decoding="async"';
+    }
+    return implode(' ', $parcalar);
+}
+
+/**
+ * WebP srcset'i (varyant üretilmişse).
+ *
+ * 1.0'da WebP varyantları ÜRETİLİYOR (inc/media.php) ama hiçbir yerde
+ * SUNULMUYORDU — diskte duran, hiç kullanılmayan dosyalar. Tema bunu
+ * <picture><source type="image/webp" …> ile kullanır; destek yoksa
+ * tarayıcı sessizce <img> kaynağına düşer.
+ *
+ * @return string Boşsa WebP yok demektir; tema <source> basmamalıdır.
+ */
+function post_image_webp_srcset($post) {
+    $file = is_array($post) ? (string)arr($post, 'image', '') : (string)$post;
+    if ($file === '' || preg_match('#^https?://#i', $file)) { return ''; }
+    if (!function_exists('media_variant_file')) { return ''; }
+
+    $parcalar = [];
+    foreach (['thumb' => 400, 'medium' => 800, 'large' => 1280] as $ad => $w) {
+        // WebP kopyası diskte 'ad-thumb.webp' desenindedir (inc/media.php:203).
+        $v = media_variant_file($file, $ad);
+        if ($v === '') { continue; }
+        $nokta = strrpos($v, '.');
+        $wv = $nokta === false ? '' : substr($v, 0, $nokta) . '.webp';
+        if ($wv !== '' && is_file(UPLOAD_DIR . '/' . $wv)) { $parcalar[] = url_upload($wv) . ' ' . $w . 'w'; }
+    }
+    return implode(', ', $parcalar);
+}
+
 /** Görsel için srcset dizesi (varyant varsa). */
 function post_image_srcset($post) {
     $file = is_array($post) ? (string)arr($post, 'image', '') : (string)$post;
@@ -726,12 +815,18 @@ function post_register_view($postId) {
     // SECURITY_AUDIT B-02: yalnız oturuma güvenmek yetmiyor — çerez döndürmeyen
     // bir istemci her istekte yeni oturum açıp sayacı şişirebiliyordu.
     // IP + haber temelli, 6 saatlik ikinci bir tekilleştirme kapısı eklendi.
+    //
+    // DENETIM TURU 3 (on yuz B01): burada OTURUM ACILMAZ.
+    // Eskiden IP kapisinin ustune bir de $_SESSION['seen_posts'] katmani vardi.
+    // assets/site.js bu ucu HER haber sayfasinda otomatik cagirdigi icin sonuc
+    // sudur: her anonim okur bir cerez kapiyor ve o andan sonra hicbir sayfa
+    // onbellekten sunulamiyor — Faz 4 sayfa onbellegi ziyaretin yalnizca ILK
+    // sayfasina hizmet ediyordu. Ayrica cerez saklamayan botlar her istekte
+    // yeni bir oturum dosyasi yaratiyordu.
+    // IP + haber kapisi (6 saat) zaten BIRINCIL tekillestiricidir ve cerez
+    // saklamayan istemciye karsi oturumdan DAHA guclusudur; ikinci katman
+    // yalnizca maliyet getiriyordu. CONTRACTS 3.1: on yuz cerez VERMEZ.
     if (!rate_limit('viewuniq:' . client_ip() . ':' . $postId, 1, 21600)) { return; }
-    session_boot();
-    if (!isset($_SESSION['seen_posts'])) { $_SESSION['seen_posts'] = []; }
-    if (isset($_SESSION['seen_posts'][$postId])) { return; }
-    $_SESSION['seen_posts'][$postId] = 1;
-    if (count($_SESSION['seen_posts']) > 300) { array_shift($_SESSION['seen_posts']); }
     try { q('UPDATE posts SET view_count = view_count + 1 WHERE id = :i', [':i' => $postId]); } catch (Throwable $e) { }
 }
 

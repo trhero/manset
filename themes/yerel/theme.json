@@ -46,6 +46,10 @@
       "options": [{"value":"border","label":"Çerçeveli"},{"value":"shadow","label":"Gölgeli"},{"value":"flat","label":"Düz"}],
       "group": "Yerleşim" },
 
+    { "key": "show_reading_time", "label": "Okuma süresi göster", "type": "bool", "default": "1", "group": "Bileşenler" },
+    { "key": "show_share", "label": "Paylaş düğmeleri", "type": "bool", "default": "1", "group": "Bileşenler" },
+    { "key": "show_suggest", "label": "Aramada canlı öneri", "type": "bool", "default": "1", "group": "Bileşenler" },
+
     { "key": "custom_css", "label": "Özel CSS", "type": "css", "default": "", "group": "Gelişmiş", "admin_only": true }
   ]
 }

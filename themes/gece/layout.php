@@ -34,5 +34,6 @@ $seritSabit = theme_setting('serit_sabit', '1') === '1';
 <?php part('footer'); ?>
 <?= cookie_notice_html() ?>
 <script src="<?= esc(url_asset('site.js')) ?>?v=<?= esc(MANSET_VERSION) ?>" defer></script>
+<script src="<?= esc(theme_url('theme.js')) ?>?v=<?= esc(MANSET_VERSION) ?>" defer></script>
 </body>
 </html>

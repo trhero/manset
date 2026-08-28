@@ -176,7 +176,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && inp('do') === 'delete') {
             // B01'in silme tarafı: yönetici hesabına yalnız yönetici dokunur.
             flash('err', 'Yönetici hesabını yalnız bir yönetici silebilir.');
         } else {
-            $postCount = (int)qv('SELECT COUNT(*) FROM posts WHERE author_id = :i', [':i' => $id], 0);
+            $postCount = (int)qv('SELECT COUNT(*) FROM posts p WHERE p.author_id = :i' . trash_filter_sql('p'), [':i' => $id], 0);
             q('DELETE FROM users WHERE id = :i', [':i' => $id]);
             // Kullanıcıya bağlı izin/kapsam kayıtları da düşer (yetim satır kalmasın)
             foreach (['user_grants', 'user_categories'] as $tablo) {
@@ -218,7 +218,7 @@ $personelSayi = (int)qv('SELECT COUNT(*) FROM users WHERE role <> \'member\'', [
 $uyeSayi = (int)qv('SELECT COUNT(*) FROM users WHERE role = \'member\'', [], 0);
 
 $users = qa('SELECT u.id, u.name, u.email, u.role, u.active, u.is_staff, u.is_responsible, u.created_at,
-    (SELECT COUNT(*) FROM posts p WHERE p.author_id = u.id) AS post_count
+    (SELECT COUNT(*) FROM posts p WHERE p.author_id = u.id' . trash_filter_sql('p') . ') AS post_count
     FROM users u WHERE ' . $kosul . ' ORDER BY u.role ASC, u.name ASC
     LIMIT ' . (int)$perPage . ' OFFSET ' . (int)(($sayfa - 1) * $perPage), $par);
 

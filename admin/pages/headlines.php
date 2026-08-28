@@ -31,6 +31,23 @@ foreach (home_blocks() as $b) {
     if ($b['type'] === 'headline') { $headlineBlockOn = true; break; }
 }
 
+/* NEDEN (denetim 3 · cop-izin B10): Çöpteki haber manşette/son dakikada KALIYOR.
+ * vitrin_is_published() `deleted_at` bakmadığı için çöpteki bir haber manşete
+ * alınabiliyor; dahası zaten manşetteyken çöpe atılan haber, listeleri süzen
+ * published_where() yüzünden bu ekrandan TAMAMEN kayboluyor — editör onu
+ * manşetten çıkaramıyor ve haber geri alındığı anda sessizce yeniden manşete
+ * dönüyor. Seçim listesi (headlines.search) zaten published_where() ile süzüyor,
+ * yani çöptekiler orada görünmüyor; eksik olan, "görünmez ama bayrağı duran"
+ * kayıtların editöre "çöpte" olarak GÖSTERİLMESİ. Aşağıdaki sorgu bunu yapar.
+ * Sütun yoksa (göç 013 uygulanmamış) hiç sorgulanmaz, ekran çöker de değişmez de. */
+$copluBayraklar = [];
+if (function_exists('schema_has_column') && schema_has_column('posts', 'deleted_at')) {
+    $copluBayraklar = qa('SELECT p.id, p.title, p.is_headline, p.is_breaking, c.name AS category_name
+        FROM posts p LEFT JOIN categories c ON c.id = p.category_id
+        WHERE p.deleted_at <> \'\' AND (p.is_headline = 1 OR p.is_breaking = 1)
+        ORDER BY p.headline_sort ASC, p.id DESC LIMIT 20');
+}
+
 $bootstrap = [
     'headlines'  => $payload['items'],
     'picks'      => $payload['picks'],
@@ -77,6 +94,30 @@ $bootstrap = [
 <?php if (!$headlineBlockOn): ?>
   <div class="uyari warn">Şu anda anasayfa blok diziliminde <strong>Manşet</strong> bloğu kapalı görünüyor.
     Buradaki sıralama kaydedilir, ancak blok açılana dek ön yüzde görünmez.</div>
+<?php endif; ?>
+
+<?php /* cop-izin B10 — çöpteyken manşet/son dakika bayrağı üstünde kalan haberler.
+         Aşağıdaki listeler bunları göstermez (published_where() süzer); editör
+         burada görüp çöp kutusundan işlem yapabilsin. */ ?>
+<?php if ($copluBayraklar): ?>
+  <div class="uyari warn">
+    <strong>Çöp kutusundaki <?= count($copluBayraklar) ?> haberin manşet/son dakika işareti hâlâ duruyor.</strong>
+    Bu haberler ön yüzde görünmez, ancak çöpten <em>geri alınırlarsa</em> doğrudan manşete/son dakika şeridine dönerler.
+    <ul class="kucuk">
+      <?php foreach ($copluBayraklar as $ck): ?>
+        <li>
+          <?= esc($ck['title']) ?>
+          <span class="rozet olumsuz">çöpte</span>
+          <?php if ((int)$ck['is_headline'] === 1): ?><span class="rozet uyari">manşette</span><?php endif; ?>
+          <?php if ((int)$ck['is_breaking'] === 1): ?><span class="rozet uyari">son dakika</span><?php endif; ?>
+          <span class="soluk"><?= esc(arr($ck, 'category_name', '') ?: 'Kategorisiz') ?></span>
+        </li>
+      <?php endforeach; ?>
+    </ul>
+    <?php if (admin_page_exists('posts')): ?>
+      <a href="<?= esc(admin_url('posts', ['durum' => 'cop'])) ?>">Çöp kutusunu aç →</a>
+    <?php endif; ?>
+  </div>
 <?php endif; ?>
 
 <div class="sekmeler" role="tablist">

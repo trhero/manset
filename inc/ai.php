@@ -16,6 +16,15 @@
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/sanitize.php';
 
+/*
+ * NEDEN (B08): para cinsinden tavan yalnız birim fiyat girilmişse ölçülebiliyor,
+ * yani varsayılan kurulumda hiç korumuyordu. Bu yüzden çağrı sayısına dayalı ve
+ * HER kurulumda çalışan bir tavan da var; varsayılanı bilinçli olarak
+ * "sınırsız" DEĞİL, makul bir üst sınırdır (güvenli varsayılan ilkesi).
+ * Panelden serbestçe değiştirilebilir, 0 yazılırsa sınır kalkar.
+ */
+if (!defined('AI_MONTHLY_CALLS_DEFAULT')) { define('AI_MONTHLY_CALLS_DEFAULT', 1000); }
+
 // ============================================================ yapılandırma
 
 /** Etkin sağlayıcı anahtarı. */
@@ -68,11 +77,163 @@ function ai_status_text() {
     if (ai_test_mode()) { return 'test modu'; }
     if (setting('ai_enabled', '0') !== '1') { return 'kapalı'; }
     if (ai_api_key() === '') { return 'yapılandırılmadı'; }
+    if (ai_budget_exceeded()) { return 'bütçe doldu'; }
     return 'hazır';
 }
 
 /** İstek zaman aşımı (saniye). */
 function ai_timeout() { return max(5, min(180, (int)setting('ai_timeout', '45'))); }
+
+/** Bir çağrının anlamlı sayılabilmesi için gereken en az süre (sn). */
+if (!defined('AI_MIN_TIMEOUT')) { define('AI_MIN_TIMEOUT', 8); }
+
+/**
+ * Cron turu içindeyken çağrı zaman aşımını KALAN bütçeye göre kısar.
+ *
+ * NEDEN (B03): ai_jobs_tick() eskiden turun başında ai_timeout() (varsayılan
+ * 45 sn) kadar rezerv istiyordu; panel tetiklemesinin bütçesi bunun altında
+ * kaldığı için AI görevi HİÇ iş almıyordu. Artık çağrı, kalan süreye sığacak
+ * şekilde kısaltılır: 20 sn'lik bir turda 19 sn'lik bir çağrı yapılır,
+ * "hiç çalışmama" yerine "kısa zaman aşımıyla çalışma" tercih edilir.
+ * Cron bütçesi yoksa (elle tetikleme, panel içi tek çağrı) ayar aynen geçerlidir.
+ */
+function ai_effective_timeout() {
+    $t = ai_timeout();
+    if (!function_exists('cron_budget_active') || !cron_budget_active()) { return $t; }
+    $kalan = (int)floor(cron_time_left()) - 1;   // 1 sn: yanıt işleme payı
+    if ($kalan <= 0) { return AI_MIN_TIMEOUT; }
+    return max(AI_MIN_TIMEOUT, min($t, $kalan));
+}
+
+// ============================================================ aylık bütçe tavanı
+/*
+ * NEDEN (1.1-07): otomatik yeniden yazım açık bir kaynak, beslemede bir
+ * patlama olduğunda gece boyunca yüzlerce çağrı yapabilir. Yayıncı bunu ancak
+ * sağlayıcının faturasında görür. `ai_monthly_budget` tavanı aşıldığında yeni
+ * çağrı YAPILMAZ; kuyruk durur ama iş KAYBOLMAZ — ay dönünce ya da tavan
+ * yükseltilince kaldığı yerden devam eder.
+ *
+ * Tutar, yayıncının girdiği birim fiyatlarla (ai_price_in / ai_price_out)
+ * ai_logs'taki jetonlardan hesaplanır. Fiyat girilmemişse tavan ÖLÇÜLEMEZ ve
+ * hiçbir çağrı engellenmez (yanlış pozitifle sistemi kilitlemek en kötüsü).
+ */
+
+/** Aylık bütçe tavanı (para birimi cinsinden; 0 = sınırsız). */
+function ai_monthly_budget() {
+    $v = trim(str_replace(',', '.', (string)setting('ai_monthly_budget', '0')));
+    if ($v === '' || !is_numeric($v) || (float)$v < 0) { return 0.0; }
+    return (float)$v;
+}
+
+/*
+ * NEDEN (B08): para cinsinden tavan YALNIZ birim fiyat girilmişse ölçülebilir
+ * (`ai_price_in`/`ai_price_out`). Varsayılan kurulumda ikisi de boş olduğundan
+ * `ai_monthly_budget` kaç olursa olsun HİÇBİR koruma sağlamıyordu. Çağrı sayısı
+ * ise fiyattan bağımsız olarak `ai_logs`'tan sayılabilir; bu yüzden ikinci ve
+ * HER KURULUMDA çalışan bir tavan eklendi: `ai_monthly_calls`.
+ */
+/** Aylık çağrı tavanı (0 = sınırsız). Varsayılan koruyucudur. */
+function ai_monthly_calls() {
+    $v = trim((string)setting('ai_monthly_calls', (string)AI_MONTHLY_CALLS_DEFAULT));
+    if ($v === '' || !ctype_digit($v)) { return AI_MONTHLY_CALLS_DEFAULT; }
+    return max(0, min(1000000, (int)$v));
+}
+
+/** Verilen aydaki toplam AI çağrısı (fiyat ayarı GEREKTİRMEZ). */
+function ai_month_calls($ym = '') {
+    $ym = preg_match('/^\d{4}-\d{2}$/', (string)$ym) ? (string)$ym : date('Y-m');
+    $bas = $ym . '-01 00:00:00';
+    $son = date('Y-m-d H:i:s', strtotime($ym . '-01 00:00:00 +1 month'));
+    try {
+        return (int)qv('SELECT COUNT(*) FROM ai_logs WHERE created_at >= :b AND created_at < :s',
+            [':b' => $bas, ':s' => $son], 0);
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 1M jeton başına birim fiyat ayarı (girilmemişse 0). */
+function ai_price_setting($key) {
+    $v = trim(str_replace(',', '.', (string)setting($key, '')));
+    return ($v === '' || !is_numeric($v)) ? 0.0 : (float)$v;
+}
+
+/**
+ * Verilen ayın (varsayılan: içinde bulunduğumuz ay) tahmini AI harcaması.
+ * @param string $ym 'YYYY-MM'
+ */
+function ai_month_spent($ym = '') {
+    $ym = preg_match('/^\d{4}-\d{2}$/', (string)$ym) ? (string)$ym : date('Y-m');
+    $bas = $ym . '-01 00:00:00';
+    $son = date('Y-m-d H:i:s', strtotime($ym . '-01 00:00:00 +1 month'));
+    try {
+        $r = q1('SELECT COALESCE(SUM(tokens_in), 0) AS ti, COALESCE(SUM(tokens_out), 0) AS to_
+                 FROM ai_logs WHERE created_at >= :b AND created_at < :s', [':b' => $bas, ':s' => $son]);
+    } catch (Throwable $e) { return 0.0; }
+    if (!$r) { return 0.0; }
+    $tutar = ((int)$r['ti'] / 1000000) * ai_price_setting('ai_price_in')
+           + ((int)$r['to_'] / 1000000) * ai_price_setting('ai_price_out');
+    return round($tutar, 4);
+}
+
+/**
+ * Bütçe durumu (panelde gösterilir).
+ * @return array ['aktif','olculebilir','tavan','harcanan','kalan','oran','doldu','ay']
+ */
+function ai_budget_status() {
+    $tavan = ai_monthly_budget();
+    $olculebilir = (ai_price_setting('ai_price_in') > 0 || ai_price_setting('ai_price_out') > 0);
+    $harcanan = $olculebilir ? ai_month_spent() : 0.0;
+    $aktif = ($tavan > 0 && $olculebilir);
+    $oran = ($tavan > 0) ? (int)round(min(999, ($harcanan / $tavan) * 100)) : 0;
+
+    // İKİNCİ TAVAN (B08): çağrı sayısı — fiyat girilmese de ölçülebilir.
+    $cagriTavan = ai_monthly_calls();
+    $cagriSayi  = ($cagriTavan > 0) ? ai_month_calls() : 0;
+    $cagriOran  = ($cagriTavan > 0) ? (int)round(min(999, ($cagriSayi / $cagriTavan) * 100)) : 0;
+    $cagriDoldu = ($cagriTavan > 0 && $cagriSayi >= $cagriTavan);
+
+    return [
+        'aktif'        => $aktif,
+        'olculebilir'  => $olculebilir,
+        'tavan'        => $tavan,
+        'harcanan'     => $harcanan,
+        'kalan'        => $aktif ? max(0, round($tavan - $harcanan, 4)) : 0.0,
+        'oran'         => $oran,
+        'doldu'        => ($aktif && $harcanan >= $tavan),
+        // Tavan girilmiş ama birim fiyat yoksa panelde görünür uyarı gerekir.
+        'olculemiyor'  => ($tavan > 0 && !$olculebilir),
+        'cagri_tavan'  => $cagriTavan,
+        'cagri_sayisi' => $cagriSayi,
+        'cagri_oran'   => $cagriOran,
+        'cagri_doldu'  => $cagriDoldu,
+        // Herhangi bir tavan dolduysa çağrı yapılmaz.
+        'herhangi_doldu' => (($aktif && $harcanan >= $tavan) || $cagriDoldu),
+        'ay'           => date('Y-m'),
+    ];
+}
+
+/** Tavan doldu mu? (test modunda gerçek maliyet oluşmadığından her zaman false) */
+function ai_budget_exceeded() {
+    if (ai_test_mode()) { return false; }
+    $d = ai_budget_status();
+    return !empty($d['herhangi_doldu']);
+}
+
+/** Kullanıcıya gösterilecek bütçe hatası. */
+function ai_budget_message() {
+    $d = ai_budget_status();
+    if (!empty($d['cagri_doldu'])) {
+        return 'Aylık yapay zekâ çağrı tavanı doldu ('
+             . number_format((float)$d['cagri_sayisi'], 0, ',', '.') . ' / '
+             . number_format((float)$d['cagri_tavan'], 0, ',', '.') . ' çağrı). '
+             . 'Yeni çağrı yapılmadı; işler kuyrukta bekliyor. '
+             . 'Panel → Yapay Zekâ → Günlükler ekranından tavanı yükseltebilirsiniz.';
+    }
+    return 'Aylık yapay zekâ bütçesi doldu ('
+         . number_format((float)$d['harcanan'], 2, ',', '.') . ' / '
+         . number_format((float)$d['tavan'], 2, ',', '.') . '). '
+         . 'Yeni çağrı yapılmadı; işler kuyrukta bekliyor. '
+         . 'Panel → Yapay Zekâ ekranından tavanı yükseltebilirsiniz.';
+}
 
 // ============================================================ istem şablonları
 
@@ -145,6 +306,19 @@ function ai_complete($userPrompt, array $opts = []) {
         $r = ai_fixture($userPrompt, $opts);
         $ms = (int)round((microtime(true) - $started) * 1000);
         return ai_result(true, $r, 100, 120, $ms, '', $action);
+    }
+    // BÜTÇE TAVANI: tavan dolduysa çağrı hiç yapılmaz (1.1-07).
+    // İş kuyrukta kalır; ai_jobs_tick() bunu geçici hata gibi ele almaz,
+    // turu baştan atlar — deneme hakkı harcanmaz.
+    if (ai_budget_exceeded()) {
+        /*
+         * NEDEN (B08): tavan yüzünden ENGELLENEN çağrı ai_logs'a YAZILMAZ.
+         * Yazılsaydı aylık çağrı sayacı, hiç yapılmamış çağrılarla şişer;
+         * yayıncı tavanı yükselttiğinde bu hayalet kayıtlar da kotadan düşerdi.
+         * Sayaç yalnız gerçekten sağlayıcıya giden çağrıları saymalıdır.
+         */
+        return ['ok' => false, 'text' => '', 'tokens_in' => 0, 'tokens_out' => 0,
+                'ms' => 0, 'error' => ai_budget_message()];
     }
 
     $system = isset($opts['system']) ? (string)$opts['system'] : ai_system_prompt();
@@ -264,7 +438,8 @@ function ai_http_post($url, array $headers, array $payload) {
     if ($safeT === false) { return ['ok' => false, 'body' => '', 'status' => 0, 'error' => 'Geçersiz veya izin verilmeyen sağlayıcı adresi.']; }
     $safe = $safeT['url'];
     $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
-    $timeout = ai_timeout();
+    // Cron bütçesi varsa zaman aşımı kalan süreye kısılır (B03).
+    $timeout = ai_effective_timeout();
 
     if (function_exists('curl_init')) {
         $ch = curl_init($safe);

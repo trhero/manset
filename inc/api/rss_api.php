@@ -41,6 +41,8 @@ api_register('rss.list', function () {
             'ai_rewrite'    => (int)$r['ai_rewrite'],
             'active'        => (int)$r['active'],
             'error_count'   => (int)$r['error_count'],
+            'interval_min'  => (int)($r['interval_min'] ?? 0),
+            'next_check_at' => (string)($r['next_check_at'] ?? ''),
             'last_fetch_at' => (string)($r['last_fetch_at'] ?? ''),
             'fetch_error'   => (string)($r['fetch_error'] ?? ''),
             'item_count'    => (int)$r['item_count'],
@@ -94,6 +96,17 @@ api_register('rss.save', function () {
         'ai_rewrite'   => $aiRewrite,
         'active'       => $active,
     ];
+
+    // Kaynak başına kontrol aralığı (dk). 0 = varsayılan (RSS_DEFAULT_INTERVAL).
+    // Sütun göç 013 ile geldi; uygulanmadıysa alan sessizce yok sayılır.
+    if (rss_has_backoff_columns()) {
+        $interval = (int)rss_api_field('interval_min', 0);
+        if ($interval < 0) { $interval = 0; }
+        if ($interval > 10080) { $interval = 10080; }   // en çok 7 gün
+        $data['interval_min'] = $interval;
+        // Aralık değişince bir sonraki kontrol hemen yapılabilsin.
+        $data['next_check_at'] = '';
+    }
 
     if ($id > 0) {
         if (!qv('SELECT id FROM rss_sources WHERE id = :i', [':i' => $id], 0)) {

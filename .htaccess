@@ -1,10 +1,27 @@
 # Manşet — kök yapılandırma
+#
+# KURAL: Buradaki her direktif <IfModule> ile sarılıdır. Modül sunucuda yoksa
+# Apache yapılandırma hatası (500) vermez, blok sessizce atlanır. Yeni satır
+# eklerken bu kuralı bozmayın.
+
 Options -Indexes
 DirectoryIndex index.php index.html
+
+# BEGIN MANSET-KURULUM — kurulum sihirbazı yazdı, elle düzenlemeyin
+# Alt dizine kurulumda RewriteBase ve (seçilmişse) HTTPS yönlendirmesi
+# install/index.php tarafından bu iki işaretçinin arasına yazılır.
+# END MANSET-KURULUM
 
 <IfModule mod_rewrite.c>
   RewriteEngine On
   # Alt klasöre kurulumda gerekirse açın: RewriteBase /altklasor/
+  # (Kurulum sihirbazı bunu yukarıdaki MANSET-KURULUM bloğuna otomatik yazar.)
+
+  # Eski XML adresleri → PHP üreticileri. KALICI (301): arama motorları
+  # yeni adresi öğrensin ve eskisini indeksten düşürsün.
+  RewriteRule ^sitemap\.xml$ sitemap.php [R=301,L]
+  RewriteRule ^rss\.xml$     rss.php     [R=301,L]
+
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteRule ^(.*)$ index.php [QSA,L]
@@ -15,6 +32,10 @@ DirectoryIndex index.php index.html
   Header set Referrer-Policy "strict-origin-when-cross-origin"
 </IfModule>
 
+# ---------------------------------------------------------------- güvenlik
+# Veritabanı dosyaları, günlükler ve depo belgeleri dışarıya kapalı.
+# (db/ ve inc/ klasörlerinde ayrıca kendi .htaccess dosyaları vardır;
+#  uploads/.htaccess ise PHP çalıştırmayı kapatır — hiçbiri değiştirilmemelidir.)
 <FilesMatch "\.(sqlite|sqlite-wal|sqlite-shm|log|md|sh|json)$">
   <IfModule mod_authz_core.c>
     Require all denied
@@ -24,3 +45,66 @@ DirectoryIndex index.php index.html
     Deny from all
   </IfModule>
 </FilesMatch>
+
+# ---------------------------------------------------------------- sıkıştırma
+# Metin türleri gzip ile gönderilir. Görsel/video zaten sıkıştırılmış olduğu
+# için listeye ALINMAZ (CPU harcar, kazanç vermez).
+<IfModule mod_deflate.c>
+  <IfModule mod_filter.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/css text/xml
+    AddOutputFilterByType DEFLATE application/javascript application/x-javascript text/javascript
+    AddOutputFilterByType DEFLATE application/json application/ld+json
+    AddOutputFilterByType DEFLATE application/xml application/rss+xml application/atom+xml
+    AddOutputFilterByType DEFLATE image/svg+xml
+    AddOutputFilterByType DEFLATE font/woff2 font/woff application/font-woff
+  </IfModule>
+</IfModule>
+
+<IfModule mod_headers.c>
+  # Sıkıştırılmış ve düz sürüm ara belleklerde karışmasın
+  <FilesMatch "\.(html|css|js|json|xml|svg)$">
+    Header append Vary Accept-Encoding
+  </FilesMatch>
+</IfModule>
+
+# ---------------------------------------------------------------- önbellek
+# assets/ ve uploads/ altındaki dosyalar sürüm damgasıyla çağrılır; uzun
+# önbellek güvenlidir. HTML İÇİN ÖNBELLEK VERİLMEZ — sayfa önbelleği PHP
+# tarafında (inc/cache.php) yönetilir, buradan karışılmaz.
+<IfModule mod_expires.c>
+  ExpiresActive On
+  # ExpiresDefault BİLİNÇLİ OLARAK TANIMLANMADI ve text/html listeye ALINMADI:
+  # tanımlanırsa mod_expires, PHP'nin kendi gönderdiği sayfa önbelleği
+  # başlıklarının üzerine yazar. HTML başlıklarının tek sahibi inc/cache.php'dir.
+  ExpiresByType text/css                "access plus 1 year"
+  ExpiresByType text/javascript         "access plus 1 year"
+  ExpiresByType application/javascript  "access plus 1 year"
+  ExpiresByType image/jpeg              "access plus 1 year"
+  ExpiresByType image/png               "access plus 1 year"
+  ExpiresByType image/gif               "access plus 1 year"
+  ExpiresByType image/webp              "access plus 1 year"
+  ExpiresByType image/avif              "access plus 1 year"
+  ExpiresByType image/svg+xml           "access plus 1 year"
+  ExpiresByType image/x-icon            "access plus 1 year"
+  ExpiresByType font/woff2              "access plus 1 year"
+  ExpiresByType font/woff               "access plus 1 year"
+</IfModule>
+
+# Uzun önbellek YALNIZ GERÇEK STATİK DOSYALARA uygulanır.
+#
+# DİKKAT — burada `SetEnvIf Request_URI` KULLANILMAZ (denetim turu 3, B11-01).
+# SetEnvIf isteğin YOLUNU eşler, sunulan şeyin dosya olup olmadığına bakmaz ve
+# mod_rewrite'tan ÖNCE çalışır. Ön denetleyici var olmayan her yolu index.php'ye
+# taşıdığı ve router `?r=` parametresini öncelikli okuduğu için
+#     /uploads/x?r=haber/abonelere-ozel-42
+# hem "statik" damgası alıyor hem de kişiselleştirilmiş sayfayı 200 ile basıyordu.
+# `Header set` de render()'ın yazdığı `private, no-store` başlığını EZİYORDU:
+# abonenin gördüğü tam metin bir CDN'de bir yıl paylaşılabilir hâle geliyordu.
+#
+# FilesMatch, yeniden yazma SONRASINDAKİ gerçek dosya adına uygulanır;
+# index.php çıktısı hiçbir zaman eşleşmez.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(css|js|mjs|jpe?g|png|gif|webp|avif|svg|ico|woff2?|ttf|eot|map)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+</IfModule>

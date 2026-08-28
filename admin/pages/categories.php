@@ -12,7 +12,7 @@ $editId = inp_i('duzenle', 0);
 $editCat = $editId > 0 ? q1('SELECT * FROM categories WHERE id = :i', [':i' => $editId]) : null;
 
 $kategoriler = qa('SELECT c.id, c.name, c.slug, c.sort, c.color, c.in_menu, c.active,
-        (SELECT COUNT(*) FROM posts p WHERE p.category_id = c.id) AS post_count
+        (SELECT COUNT(*) FROM posts p WHERE p.category_id = c.id' . trash_filter_sql('p') . ') AS post_count
     FROM categories c ORDER BY c.sort ASC, c.name ASC');
 $sonIndeks = count($kategoriler) - 1;
 ?>

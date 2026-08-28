@@ -329,3 +329,105 @@ details.duzeltme[open] summary{margin-bottom:10px}
 .kart-kategori{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box}
 .kart-govde{min-width:0}
 .kart-sirali .kart-kategori,.kart-sirali .kart-baslik{max-width:calc(100% - 30px)}
+
+/* ============================================================================
+   1.1 — mobil menü · canlı arama önerisi · paylaş · kaydet · ödeme duvarı
+   Yerel dili: sıcak krem zemin, teal ana renk, amber vurgu; duyuru kutusuyla
+   akraba görünen dolgulu kutular ve yumuşak köşeler.
+   ============================================================================ */
+
+picture{display:block}
+
+/* ---------------------------------------------------------------- mobil menü */
+.menu-dugme{
+  display:none;flex-direction:column;justify-content:center;gap:5px;
+  width:42px;height:38px;padding:0 9px;background:transparent;
+  border:1px solid var(--renk-cizgi);border-radius:var(--kose);cursor:pointer;
+}
+.menu-dugme span{display:block;height:2px;background:var(--renk-metin);border-radius:2px}
+.menu-dugme:hover{filter:none;border-color:var(--renk-ana)}
+.menu-dugme[aria-expanded="true"]{background:var(--renk-ana);border-color:var(--renk-ana)}
+.menu-dugme[aria-expanded="true"] span{background:#fff}
+
+/* ------------------------------------------------------- canlı arama önerisi */
+.arama{position:relative}
+.arama-oneri{
+  position:absolute;top:calc(100% + 5px);left:0;right:0;min-width:240px;
+  background:var(--renk-yuzey);border:1px solid var(--renk-cizgi);border-radius:var(--kose);
+  box-shadow:0 10px 26px rgba(36,29,22,.16);list-style:none;margin:0;padding:4px;
+  z-index:60;max-height:340px;overflow:auto;
+}
+.arama-oneri li a{display:block;padding:9px 11px;border-radius:4px;font-size:14px;line-height:1.35}
+.arama-oneri li a:hover,.arama-oneri li.secili a{background:var(--renk-zemin);color:var(--renk-ana);text-decoration:none}
+.arama-oneri .oneri-bos{padding:10px 11px;color:var(--renk-soluk);font-size:14px}
+
+/* ---------------------------------------------------------------- paylaş */
+.paylas{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:16px 0}
+.paylas-etiket{font-size:13px;color:var(--renk-soluk);font-weight:700}
+.paylas-dugme{
+  font:inherit;font-size:13px;font-weight:600;padding:6px 14px;cursor:pointer;
+  background:var(--renk-yuzey);color:var(--renk-metin);
+  border:1px solid var(--renk-cizgi);border-radius:99px;display:inline-block;
+}
+.paylas-dugme:hover{background:var(--renk-ana);border-color:var(--renk-ana);color:#fff;filter:none;text-decoration:none}
+.paylas-sonuc{font-size:13px;color:var(--renk-ana);font-weight:600}
+
+/* ------------------------------------------------------ başlık satırı + kaydet */
+.baslik-satiri{display:flex;gap:14px;align-items:flex-start;justify-content:space-between}
+.baslik-satiri h1{flex:1;min-width:0}
+.kaydet-dugme{
+  flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;margin-top:5px;
+  background:var(--renk-yuzey);color:var(--renk-metin);
+  border:1px solid var(--renk-cizgi);border-radius:99px;padding:7px 15px;
+  font:inherit;font-size:13px;font-weight:700;cursor:pointer;
+}
+.kaydet-dugme:hover{border-color:var(--renk-ana);color:var(--renk-ana);filter:none;background:var(--renk-yuzey)}
+.kaydet-dugme[disabled]{opacity:.55;cursor:progress}
+.kaydet-dugme.kayitli{background:var(--renk-ana);border-color:var(--renk-ana);color:#fff}
+.kaydet-dugme.kayitli .kaydet-metin{font-size:0}
+.kaydet-dugme.kayitli .kaydet-metin::after{content:"Kaydedildi";font-size:13px}
+
+.okuma-suresi::before{content:"⏱ "}
+.yorum-kimlik{margin:-4px 0 12px}
+.yorum-giris a{color:var(--renk-ana);text-decoration:underline}
+
+/* ---------------------------------------------------------------- ödeme duvarı */
+/* Dönüşüm kutusu: duyuru kutusuyla akraba — kalın sol/üst kenar, sıcak dolgu. */
+.icerik-kilit{
+  position:relative;margin:26px 0 10px;padding:28px 26px 24px;text-align:center;
+  background:linear-gradient(180deg,var(--renk-yuzey) 0%,var(--renk-zemin) 100%);
+  border:1px solid var(--renk-cizgi);border-top:4px solid var(--renk-ana);
+  border-radius:var(--kose);box-shadow:0 6px 20px rgba(36,29,22,.09);
+}
+.icerik-kilit::before{
+  content:"";position:absolute;left:0;right:0;top:-74px;height:74px;pointer-events:none;
+  background:linear-gradient(180deg,rgba(255,255,255,0),var(--renk-yuzey));
+}
+.icerik-kilit h3{font-size:23px;margin:0 0 8px}
+.icerik-kilit h3::before{content:"🔒";display:block;font-size:26px;margin-bottom:10px;line-height:1}
+.icerik-kilit p{margin:0;color:var(--renk-soluk);font-size:15.5px}
+.icerik-kilit .kilit-eylem{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:20px 0 0}
+.icerik-kilit .dugme{padding:11px 24px;font-size:15px}
+.icerik-kilit .dugme.ghost{
+  background:transparent;color:var(--renk-ana);box-shadow:inset 0 0 0 1px var(--renk-ana);
+}
+.icerik-kilit .dugme.ghost:hover{background:var(--renk-ana);color:#fff;filter:none}
+.icerik-kilit[data-kilit="premium"]{border-top-color:var(--renk-vurgu)}
+.icerik-kilit[data-kilit="premium"] h3::before{content:"★";color:var(--renk-vurgu)}
+.icerik-kilit[data-kilit="premium"] .dugme{background:var(--renk-vurgu)}
+.icerik-kilit[data-kilit="premium"] .dugme.ghost{background:transparent;color:var(--renk-vurgu);box-shadow:inset 0 0 0 1px var(--renk-vurgu)}
+.icerik-kilit[data-kilit="premium"] .dugme.ghost:hover{background:var(--renk-vurgu);color:#fff}
+
+@media(max-width:900px){
+  .menu-dugme{display:flex}
+  /* Menü mobilde hamburgerle açılır; kapalıyken yer kaplamaz. */
+  .ana-menu{display:none}
+  .ana-menu.acik{display:block}
+  .ana-menu ul{flex-direction:column}
+  .ana-menu a{border-bottom:1px solid rgba(255,255,255,.12)}
+}
+@media(max-width:640px){
+  .baslik-satiri{flex-wrap:wrap}
+  .icerik-kilit{padding:24px 17px 22px}
+  .icerik-kilit .kilit-eylem .dugme{flex:1 1 100%}
+}

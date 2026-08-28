@@ -48,8 +48,25 @@ function ai_job_duration($startedAt, $finishedAt) {
     return $d < 60 ? $d . ' sn' : floor($d / 60) . ' dk ' . ($d % 60) . ' sn';
 }
 
+/** Para birimi olmadan tutar (yayıncı hangi para biriminde çalışıyorsa o). */
+function ai_panel_tutar($n) { return number_format((float)$n, 2, ',', '.'); }
+
 $ozet = ai_logs_summary(30);
 $stats = ai_jobs_stats();
+$butce = ai_budget_status();
+
+/*
+ * Web (panel) tetikleme durumu — B03/B07 görünürlüğü.
+ * cron.php yalnız KÜTÜPHANE olarak yüklenir (MANSET_CRON_LIB), giriş bölümü
+ * çalışmaz. Dosya yoksa ya da işlev tanımlı değilse kart hiç gösterilmez
+ * (geriye dönük uyum: eski kurulumda çökmez).
+ */
+$webTick = null;
+if (is_file(ROOT_DIR . '/cron.php')) {
+    if (!defined('MANSET_CRON_LIB')) { define('MANSET_CRON_LIB', 1); }
+    require_once ROOT_DIR . '/cron.php';
+    if (function_exists('cron_web_tick_status')) { $webTick = cron_web_tick_status(); }
+}
 $promptLabels = [
     'ai_prompt_rewrite' => 'Yeniden yazım (RSS → haber)',
     'ai_prompt_title'   => 'Başlık önerisi',
@@ -67,6 +84,59 @@ $promptLabels = [
     <?php endif; ?>
   </div>
 </div>
+
+<?php if (!empty($butce['doldu'])): ?>
+  <div class="uyari err">
+    <strong>Aylık bütçe doldu.</strong>
+    Bu ay <?= esc(ai_panel_tutar($butce['harcanan'])) ?> harcandı; tavan <?= esc(ai_panel_tutar($butce['tavan'])) ?>.
+    Yeni yapay zekâ çağrısı yapılmıyor — kuyruktaki işler <strong>kaybolmadı</strong>, ay dönünce ya da
+    tavanı yükselttiğinizde kaldıkları yerden sürer.
+    <?php if ($canConfigure): ?>
+      <a href="<?= esc(admin_url('ai', ['t' => 'gunluk'])) ?>">Tavanı düzenle →</a>
+    <?php endif; ?>
+  </div>
+<?php elseif (!empty($butce['aktif']) && (int)$butce['oran'] >= 80): ?>
+  <div class="uyari warn">
+    Aylık bütçenin %<?= (int)$butce['oran'] ?>'i kullanıldı
+    (<?= esc(ai_panel_tutar($butce['harcanan'])) ?> / <?= esc(ai_panel_tutar($butce['tavan'])) ?>).
+    Tavan dolduğunda kuyruk durur, işler beklemeye alınır.
+  </div>
+<?php endif; ?>
+
+<?php /* B08: çağrı tavanı — birim fiyat girilmemiş kurulumlarda tek koruma. */ ?>
+<?php if (!empty($butce['cagri_doldu'])): ?>
+  <div class="uyari err">
+    <strong>Aylık çağrı tavanı doldu.</strong>
+    Bu ay <?= esc(ai_panel_num($butce['cagri_sayisi'])) ?> çağrı yapıldı; tavan
+    <?= esc(ai_panel_num($butce['cagri_tavan'])) ?>. Yeni yapay zekâ çağrısı yapılmıyor —
+    kuyruktaki işler <strong>kaybolmadı</strong>.
+    <?php if ($canConfigure): ?>
+      <a href="<?= esc(admin_url('ai', ['t' => 'gunluk'])) ?>">Tavanı düzenle →</a>
+    <?php endif; ?>
+  </div>
+<?php elseif ((int)$butce['cagri_tavan'] > 0 && (int)$butce['cagri_oran'] >= 80): ?>
+  <div class="uyari warn">
+    Aylık çağrı tavanının %<?= (int)$butce['cagri_oran'] ?>'i kullanıldı
+    (<?= esc(ai_panel_num($butce['cagri_sayisi'])) ?> / <?= esc(ai_panel_num($butce['cagri_tavan'])) ?> çağrı).
+  </div>
+<?php endif; ?>
+
+<?php if (!empty($butce['olculemiyor'])): ?>
+  <div class="uyari warn">
+    <strong>Aylık bütçe tavanı ölçülemiyor.</strong>
+    <?= esc(ai_panel_tutar($butce['tavan'])) ?> tutarında bir tavan girilmiş, ancak birim fiyat
+    (giriş/çıkış jetonu) girilmediği için harcama hesaplanamıyor — bu tavan <strong>hiçbir çağrıyı
+    engellemez</strong>. Tavanın işe yaraması için birim fiyatlardan en az birini girin.
+    <?php if ((int)$butce['cagri_tavan'] > 0): ?>
+      Şu an korumayı yalnız aylık çağrı tavanı (<?= esc(ai_panel_num($butce['cagri_tavan'])) ?>) sağlıyor.
+    <?php else: ?>
+      Aylık çağrı tavanı da 0 (sınırsız) — şu an <strong>hiçbir üst sınır yok</strong>.
+    <?php endif; ?>
+    <?php if ($canConfigure): ?>
+      <a href="<?= esc(admin_url('ai', ['t' => 'gunluk'])) ?>">Birim fiyat gir →</a>
+    <?php endif; ?>
+  </div>
+<?php endif; ?>
 
 <nav class="sekmeler" aria-label="Yapay zekâ bölümleri">
   <?php foreach ($aiTabs as $k => $label): ?>
@@ -186,7 +256,27 @@ $promptLabels = [
           <tr><th>API anahtarı</th><td><?= esc(ai_api_key_masked() !== '' ? ai_api_key_masked() : 'girilmedi') ?></td></tr>
           <tr><th>Zaman aşımı</th><td><?= esc((string)ai_timeout()) ?> sn</td></tr>
           <tr><th>Eşzamanlı iş</th><td><?= esc((string)ai_max_concurrent()) ?></td></tr>
-          <tr><th>Kuyruk</th><td><?= esc(ai_panel_num($stats['queued'])) ?> bekliyor · <?= esc(ai_panel_num($stats['failed'])) ?> hata</td></tr>
+          <tr><th>Kuyruk</th><td><?= esc(ai_panel_num($stats['queued'])) ?> bekliyor · <?= esc(ai_panel_num($stats['failed'])) ?> hata<?= (int)arr($stats, 'deferred', 0) > 0 ? ' · ' . esc(ai_panel_num($stats['deferred'])) . ' geri çekilmede' : '' ?></td></tr>
+          <tr><th>Aylık bütçe</th>
+            <td>
+              <?php if (!empty($butce['aktif'])): ?>
+                <?= esc(ai_panel_tutar($butce['harcanan'])) ?> / <?= esc(ai_panel_tutar($butce['tavan'])) ?>
+                (%<?= (int)$butce['oran'] ?>)
+              <?php elseif ((float)$butce['tavan'] > 0): ?>
+                <?= esc(ai_panel_tutar($butce['tavan'])) ?> — birim fiyat girilmediği için ölçülemiyor
+              <?php else: ?>
+                sınırsız
+              <?php endif; ?>
+            </td></tr>
+          <tr><th>Aylık çağrı tavanı</th>
+            <td>
+              <?php if ((int)$butce['cagri_tavan'] > 0): ?>
+                <?= esc(ai_panel_num($butce['cagri_sayisi'])) ?> / <?= esc(ai_panel_num($butce['cagri_tavan'])) ?>
+                (%<?= (int)$butce['cagri_oran'] ?>)
+              <?php else: ?>
+                sınırsız
+              <?php endif; ?>
+            </td></tr>
         </table>
       </div>
 
@@ -249,16 +339,43 @@ $promptLabels = [
   ?>
 
   <div class="izgara-4 bosluk-alt">
-    <div class="sayac"><div class="deger"><?= esc(ai_panel_num($stats['queued'])) ?></div><div class="etiket">Kuyrukta</div></div>
+    <div class="sayac"><div class="deger"><?= esc(ai_panel_num($stats['queued'])) ?></div><div class="etiket">Kuyrukta<?= (int)arr($stats, 'deferred', 0) > 0 ? ' (' . esc(ai_panel_num($stats['deferred'])) . ' geri çekilmede)' : '' ?></div></div>
     <div class="sayac"><div class="deger"><?= esc(ai_panel_num($stats['running'])) ?></div><div class="etiket">Çalışıyor</div></div>
     <div class="sayac"><div class="deger"><?= esc(ai_panel_num($stats['done'])) ?></div><div class="etiket">Tamamlandı</div></div>
     <div class="sayac<?= $stats['failed'] > 0 ? ' vurgulu' : '' ?>"><div class="deger"><?= esc(ai_panel_num($stats['failed'])) ?></div><div class="etiket">Hata</div></div>
   </div>
 
+  <?php if ((int)arr($stats, 'deferred', 0) > 0): ?>
+    <div class="uyari bilgi mini">
+      <?= esc(ai_panel_num($stats['deferred'])) ?> iş geri çekilmede: sağlayıcı geçici bir hata verdiği için
+      üstel aralıklarla (1, 2, 4, 8… dakika) yeniden denenecekler. İşler kaybolmadı.
+    </div>
+  <?php endif; ?>
+
   <?php if (setting('cron_last_run', '') === ''): ?>
-    <div class="uyari warn">Zamanlanmış görev (cron) hiç çalışmamış. Kuyruktaki işler kendiliğinden işlenmez —
-      <a href="<?= esc(admin_url('settings')) ?>">Ayarlar</a> ekranındaki cron komutunu hosting panelinize ekleyin.
-      Bu ekrandaki “Şimdi çalıştır” düğmesiyle işleri elle de başlatabilirsiniz.</div>
+    <div class="uyari warn">Zamanlanmış görev (cron) hiç <strong>tam</strong> tur çalıştırmamış. Kuyruktaki işler
+      kendiliğinden işlenmez — <a href="<?= esc(admin_url('settings')) ?>">Ayarlar</a> ekranındaki cron komutunu
+      hosting panelinize ekleyin. Bu ekrandaki “Şimdi çalıştır” düğmesiyle işleri elle de başlatabilirsiniz.
+      <?php if ($webTick !== null && $webTick['son_deneme'] !== ''): ?>
+        <br>Son deneme: <?= esc(tr_date($webTick['son_deneme'])) ?> — tur tamamlanamadı
+        (süre bütçesi yetersiz ya da görevler çalıştırılamadı).
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
+
+  <?php /* B03/B07 görünürlüğü: "poor man's cron" açıkken gerçekte ne çalışıyor? */ ?>
+  <?php if ($webTick !== null && !empty($webTick['acik'])): ?>
+    <div class="uyari <?= $webTick['mod'] === 'ucuz' ? 'warn' : 'bilgi' ?>">
+      <strong>Panel tetiklemesi açık.</strong> <?= esc($webTick['uyari']) ?>
+      <?php if ($webTick['mod'] === 'tam'): ?>
+        <br>Görev başına <?= (int)$webTick['butce'] ?> sn, tur başına en çok <?= (int)$webTick['toplam'] ?> sn.
+        Tetikleme yalnız <em>tools.manage</em> yetkisi olan kullanıcıların panel isteğinde çalışır.
+      <?php endif; ?>
+      <?php if ($webTick['son_eksik'] !== '' && $webTick['son_eksik'] > $webTick['son_tam_tur']): ?>
+        <br>Son tur <strong>eksik</strong> tamamlandı (<?= esc(tr_date($webTick['son_eksik'])) ?>):
+        bazı görevler süre bütçesi yüzünden hiç çalışamadı. Bu yüzden “son cron” damgası tazelenmedi.
+      <?php endif; ?>
+    </div>
   <?php endif; ?>
 
   <form class="arac-cubugu" method="get" action="<?= esc(base_url()) ?>/admin/">
@@ -309,7 +426,13 @@ $promptLabels = [
             </td>
             <td class="dar"><?= esc((string)$j['kind']) ?></td>
             <td class="dar"><?= admin_badge($sLabel, $sTone) ?></td>
-            <td class="dar"><?= (int)$j['attempts'] ?>/<?= AI_JOB_MAX_ATTEMPTS ?></td>
+            <td class="dar">
+              <?php $bekleme = trim((string)arr($j, 'retry_after', '')); ?>
+              <?= (int)$j['attempts'] ?>/<?= AI_JOB_MAX_RETRIES ?>
+              <?php if ($bekleme !== '' && $bekleme > now() && (string)$j['status'] === 'queued'): ?>
+                <span class="satir-alt mini soluk" title="Bir sonraki deneme: <?= esc($bekleme) ?>">geri çekilmede</span>
+              <?php endif; ?>
+            </td>
             <td class="dar"><?= esc(ai_job_duration(arr($j, 'started_at'), arr($j, 'finished_at'))) ?></td>
             <td>
               <?php if ($postId > 0 && (string)arr($j, 'post_title', '') !== ''): ?>
@@ -365,9 +488,46 @@ $promptLabels = [
     </div>
   </div>
 
+  <div class="kart">
+    <div class="kart-baslik">Bu ayki harcama (<?= esc($butce['ay']) ?>)</div>
+    <?php if (!empty($butce['olculebilir'])): ?>
+      <p><strong style="font-size:20px"><?= esc(ai_panel_tutar($butce['harcanan'])) ?></strong>
+        <?php if ((float)$butce['tavan'] > 0): ?>
+          <span class="soluk">/ <?= esc(ai_panel_tutar($butce['tavan'])) ?> tavan</span>
+          <?= admin_badge('%' . (int)$butce['oran'], !empty($butce['doldu']) ? 'olumsuz' : ((int)$butce['oran'] >= 80 ? 'uyari' : 'olumlu')) ?>
+        <?php else: ?>
+          <span class="soluk">— tavan yok (sınırsız)</span>
+        <?php endif; ?>
+      </p>
+      <?php if ((float)$butce['tavan'] > 0): ?>
+        <div class="cubuk" role="img"
+             aria-label="Bütçenin yüzde <?= (int)$butce['oran'] ?>'i kullanıldı"
+             style="height:8px;border-radius:4px;background:rgba(128,128,128,.2);overflow:hidden">
+          <div style="height:8px;width:<?= (int)min(100, $butce['oran']) ?>%;background:currentColor;opacity:.55"></div>
+        </div>
+        <p class="mini soluk bosluk-ust">Kalan: <?= esc(ai_panel_tutar($butce['kalan'])) ?>.
+          Tavan dolduğunda yeni çağrı yapılmaz; kuyruk durur, işler kuyrukta bekler.</p>
+      <?php endif; ?>
+    <?php else: ?>
+      <p class="kucuk soluk">Harcama izlenemiyor: aşağıdaki birim fiyatlar girilmeden tutar hesaplanamaz,
+        bu yüzden <strong>tutar cinsinden</strong> aylık bütçe tavanı uygulanmaz.
+        Bu kurulumda korumayı aylık <strong>çağrı</strong> tavanı sağlar.</p>
+    <?php endif; ?>
+
+    <?php /* B08: çağrı tavanı her kurulumda ölçülebilir; fiyat gerektirmez. */ ?>
+    <p class="kucuk">Bu ay <strong><?= esc(ai_panel_num($butce['cagri_sayisi'])) ?></strong> çağrı
+      <?php if ((int)$butce['cagri_tavan'] > 0): ?>
+        / <?= esc(ai_panel_num($butce['cagri_tavan'])) ?> tavan
+        <?= admin_badge('%' . (int)$butce['cagri_oran'], !empty($butce['cagri_doldu']) ? 'olumsuz' : ((int)$butce['cagri_oran'] >= 80 ? 'uyari' : 'olumlu')) ?>
+      <?php else: ?>
+        <span class="soluk">— çağrı tavanı yok (sınırsız)</span>
+      <?php endif; ?>
+    </p>
+  </div>
+
   <?php if ($canConfigure): ?>
     <form class="kart" id="aiFiyatForm">
-      <div class="kart-baslik">Birim fiyat (1M jeton başına)</div>
+      <div class="kart-baslik">Birim fiyat ve aylık bütçe</div>
       <p class="kucuk soluk">Sağlayıcınızın güncel fiyatını buraya girerseniz tahmini tutar hesaplanır.
         Boş bırakılırsa yalnız jeton sayısı gösterilir. Manşet fiyat bilgisi saklamaz.</p>
       <div class="form-satir">
@@ -382,7 +542,26 @@ $promptLabels = [
                  value="<?= esc(setting('ai_price_out', '')) ?>" maxlength="20" placeholder="örn. 15">
         </div>
       </div>
-      <button type="submit" class="dugme birincil">Fiyatları kaydet</button>
+      <div class="form-alan">
+        <label for="ai_monthly_budget">Aylık bütçe tavanı</label>
+        <input type="text" id="ai_monthly_budget" name="monthly_budget" inputmode="decimal"
+               value="<?= esc(setting('ai_monthly_budget', '0')) ?>" maxlength="20" placeholder="0 = sınırsız">
+        <span class="form-yardim">Bu ayki toplam tutar tavanı aşarsa yeni yapay zekâ çağrısı yapılmaz:
+          kuyruk durur, işler kaybolmaz. <strong>0</strong> yazarsanız sınır uygulanmaz.
+          <strong>Dikkat:</strong> bu tavan yalnız yukarıdaki birim fiyatlardan en az biri girilmişse
+          ölçülebilir; fiyat girilmemişse hiçbir çağrıyı engellemez.</span>
+      </div>
+      <div class="form-alan">
+        <label for="ai_monthly_calls">Aylık çağrı tavanı</label>
+        <input type="text" id="ai_monthly_calls" name="monthly_calls" inputmode="numeric"
+               value="<?= esc(setting('ai_monthly_calls', (string)AI_MONTHLY_CALLS_DEFAULT)) ?>"
+               maxlength="7" placeholder="0 = sınırsız">
+        <span class="form-yardim">Birim fiyattan <strong>bağımsız</strong> ikinci tavan: bu ay yapılan
+          yapay zekâ çağrısı sayısı bu değere ulaşırsa yeni çağrı yapılmaz. Fiyat girilmemiş kurulumlarda
+          harcamayı sınırlayan tek koruma budur, bu yüzden varsayılanı
+          <?= esc(ai_panel_num(AI_MONTHLY_CALLS_DEFAULT)) ?>'dir. <strong>0</strong> yazarsanız sınır uygulanmaz.</span>
+      </div>
+      <button type="submit" class="dugme birincil">Kaydet</button>
     </form>
   <?php endif; ?>
 
@@ -529,7 +708,7 @@ $promptLabels = [
     fiyatForm.addEventListener('submit', function (e) {
       e.preventDefault();
       M.api('ai.save_settings', M.formVerisi(fiyatForm)).then(function (r) {
-        if (M.sonuc(r, 'Birim fiyatlar kaydedildi.')) { setTimeout(function () { location.reload(); }, 700); }
+        if (M.sonuc(r, 'Birim fiyat ve bütçe kaydedildi.')) { setTimeout(function () { location.reload(); }, 700); }
       });
     });
   }
