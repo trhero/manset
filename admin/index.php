@@ -290,6 +290,14 @@ if (!empty($adminForbidden)) {
 }
 $adminContent = (string)ob_get_clean();
 
+// GÜVENLİK BAŞLIKLARI — panelde HİÇ YOKTU.
+// `.htaccess` bazılarını yazıyor ama yalnız Apache + mod_headers'ta okunur ve
+// `X-Frame-Options` orada da yok. Yani panel — projenin en hassas yüzeyi —
+// yabancı bir sayfaya gömülebiliyordu (tıklama hırsızlığı: görünmez bir
+// çerçevede açılan panelin üstüne düğme koyup yöneticiye tıklatmak).
+// Çıktı `ob_start()` tamponunda beklediği için başlıklar hâlâ yazılabilir.
+manset_security_headers('html');
+
 admin_layout($adminPageTitle, $adminContent, $adminPage, $adminUser, $nav);
 ob_end_flush();
 
@@ -389,6 +397,12 @@ function admin_layout($title, $content, $activePage, $user, array $nav) {
 
 /** Giriş ekranı. */
 function admin_login_screen($error = '') {
+    // GÜVENLİK BAŞLIKLARI BURADA DA GEREKLİ.
+    // Giriş sayfası, tıklama hırsızlığının ASIL hedefidir: saldırgan görünmez
+    // bir çerçevede bu sayfayı açıp üstüne sahte bir arayüz koyar ve yöneticiye
+    // farkında olmadan tıklatır. Panelin geri kalanına başlık koyup burayı
+    // atlamak, kapıyı kilitleyip pencereyi açık bırakmaktır.
+    manset_security_headers('html');
     ?><!doctype html>
 <html lang="tr">
 <head>

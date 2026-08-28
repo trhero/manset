@@ -315,3 +315,19 @@ body.giris-sayfasi{display:flex;align-items:center;justify-content:center;min-he
   font-variant-numeric: tabular-nums;
 }
 .yan-menu a.etkin .menu-rozet { background: var(--ana-koyu); }
+
+/* ---------------------------------------- kart içi tablo: açıklama sarmalanır */
+/* `th` üzerinde `white-space:nowrap` var (kısa etiketler tek satırda dursun diye)
+   ve `.satir-alt` açıklama metni bunu MİRAS ALIYORDU. Dar bir kartta (panel
+   sağ sütunu, 318px) uzun açıklama sarmalanamayınca tablo 673px'e büyüyüp
+   kartı taşırıyor ve metin ekranın dışında kalıyordu — dashboard sağlık
+   kartında görünür bir kusurdu. Etiket nowrap kalır, AÇIKLAMA sarmalanır. */
+/* `th` ayrıca `text-transform:uppercase` + `letter-spacing` taşır — kısa bir
+   sütun BAŞLIĞI için doğru, ama iki satırlık bir AÇIKLAMA cümlesi için okunmaz.
+   Tek satırdayken göze batmıyordu; sarmalanınca ortaya çıktı. */
+.kart table.tablo .satir-alt {
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}

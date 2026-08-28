@@ -192,9 +192,10 @@ function render($template, $vars = [], $status = 200) {
     if (!headers_sent()) {
         http_response_code($status);
         header('Content-Type: text/html; charset=utf-8');
-        header('X-Content-Type-Options: nosniff');
-        header('Referrer-Policy: strict-origin-when-cross-origin');
-        header('X-Frame-Options: SAMEORIGIN');
+        // Güvenlik başlıkları TEK KAYNAKTAN (inc/bootstrap.php): CSP, HSTS,
+        // Permissions-Policy ve nosniff/Referrer/X-Frame birlikte yazılır.
+        // Eskiden üçü burada elle yazılıyordu ve CSP hiç yoktu.
+        manset_security_headers('html');
 
         // ÖNBELLEK BAŞLIKLARI (denetim tur 2, paywall B04).
         // Yanıt oturuma göre DEĞİŞİR: aynı adres anonime kilit kutusu,

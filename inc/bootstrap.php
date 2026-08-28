@@ -52,9 +52,44 @@ if (function_exists('mb_internal_encoding')) { @mb_internal_encoding('UTF-8'); }
 error_reporting(E_ALL);
 
 /** Hata satırını db/error.log dosyasına yazar (dosya erişilemezse sessiz geçer). */
+/**
+ * Günlük satırından SIRLARI temizler.
+ *
+ * NEDEN: istisna mesajları çağıranın verdiği metni yankılayabilir. PDO bağlantı
+ * hatası DSN'i (host, kullanıcı) döndürür; bir HTTP istemcisi hata gövdesinde
+ * `Authorization` başlığını ya da adresteki belirteci taşıyabilir. Günlük
+ * dosyası yedeğe girer ve yedek 1.2'den beri FTP ile SİTE DIŞINA gidiyor —
+ * yani günlüğe sızan bir sır, üçüncü bir sunucuya kopyalanır.
+ *
+ * Kapsam dürüstçe: bu bir tarama, kanıt değil. Bilinen desenleri maskeler;
+ * tanımadığı bir biçim geçebilir. Asıl kural, sırrı hata mesajına HİÇ
+ * KOYMAMAKTIR — bu yalnız son savunma.
+ */
+function log_scrub($text) {
+    $t = (string)$text;
+    $desen = [
+        // Sağlayıcı anahtarları (OpenAI, Google, GitHub, Slack)
+        '/(sk|rk)-[A-Za-z0-9_\-]{16,}/',
+        '/AIza[A-Za-z0-9_\-]{20,}/',
+        '/gh[pousr]_[A-Za-z0-9]{20,}/',
+        '/xox[baprs]-[A-Za-z0-9\-]{10,}/',
+        // Anahtar=değer biçimindeki sırlar
+        '/((?:pass|passwd|password|parola|secret|token|api[_-]?key|salt|authorization)\s*[=:]\s*)(\S+)/i',
+        // Şifreli ayar damgası (zaten şifreli ama günlükte durmasın)
+        '/enc:v1:[A-Za-z0-9+\/=]{16,}/',
+        // Bağlantı dizesindeki parola:  ://kullanici:PAROLA@
+        '/(:\/\/[^:\/\s]+:)([^@\s]+)(@)/',
+    ];
+    $yerine = ['[SIR]', '[SIR]', '[SIR]', '[SIR]', '$1[SIR]', '[SIR]', '$1[SIR]$3'];
+    $t = preg_replace($desen, $yerine, $t);
+    return $t === null ? (string)$text : $t;
+}
+
 function log_error($message, $context = '') {
-    $line = '[' . date('Y-m-d H:i:s') . '] ' . trim((string)$message);
-    if ($context !== '') { $line .= ' | ' . (is_scalar($context) ? $context : json_encode($context, JSON_UNESCAPED_UNICODE)); }
+    $line = '[' . date('Y-m-d H:i:s') . '] ' . log_scrub(trim((string)$message));
+    if ($context !== '') {
+        $line .= ' | ' . log_scrub(is_scalar($context) ? (string)$context : (string)json_encode($context, JSON_UNESCAPED_UNICODE));
+    }
     $file = DB_DIR . '/error.log';
     if (!is_dir(DB_DIR)) { @mkdir(DB_DIR, 0755, true); }
     // 2 MB üstünde dosyayı devir
@@ -311,6 +346,105 @@ function session_boot() {
 
 // ---------------------------------------------------------------- kaçış / metin
 /** HTML kaçışı. Şablonlarda çıktının tek geçiş noktası. */
+/**
+ * GÜVENLİK BAŞLIKLARI — tek kaynak.
+ *
+ * Üç giriş noktası da (ön yüz `render()`, panel, JSON API) buradan geçer.
+ * `.htaccess` aynı başlıkların bir bölümünü sunucu düzeyinde de yazar; ama
+ * `mod_headers` olmayan ya da nginx kullanan bir kurulumda o dosya hiç okunmaz,
+ * bu yüzden PHP tarafı ASIL kaynaktır.
+ *
+ * @param string $tur 'html' | 'json'
+ */
+function manset_security_headers($tur = 'html') {
+    if (headers_sent()) { return; }
+
+    header('X-Content-Type-Options: nosniff');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+    header('X-Frame-Options: SAMEORIGIN');
+
+    // Tarayıcı özellikleri: hiçbiri kullanılmıyor, hepsi kapatılır. Gömülü
+    // videolar `frame-src` ile ayrıca yönetilir; bu başlık ÜST belgeye bakar.
+    header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()');
+
+    // HSTS — YALNIZ istek HTTPS ise. HTTP üzerinden gönderilmesi anlamsızdır
+    // (tarayıcı yok sayar) ve http-only bir geliştirme kurulumunda gönderilirse
+    // o alan adı tarayıcıda kilitlenip siteyi erişilemez yapar.
+    // `preload` BİLEREK YOK: preload listesine girmek geri alınamaz bir karardır
+    // ve yayıncının bilinçli tercihi olmalıdır, kütüphanenin varsayılanı değil.
+    if (manset_request_is_https()) {
+        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+    }
+
+    if ($tur === 'json') {
+        // JSON yanıtı hiçbir şey gömmez, hiçbir şeye gömülmez.
+        header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+        return;
+    }
+
+    header('Content-Security-Policy: ' . manset_csp_value());
+}
+
+/** İstek HTTPS üzerinden mi geldi? */
+function manset_request_is_https() {
+    if (!empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off') { return true; }
+    if ((int)(isset($_SERVER['SERVER_PORT']) ? $_SERVER['SERVER_PORT'] : 0) === 443) { return true; }
+    // Vekil başlığına YALNIZ trust_proxy açıkken güvenilir (bkz. NOTES.md).
+    if (cfg('trust_proxy', false)) {
+        $p = isset($_SERVER['HTTP_X_FORWARDED_PROTO']) ? strtolower((string)$_SERVER['HTTP_X_FORWARDED_PROTO']) : '';
+        if ($p === 'https') { return true; }
+    }
+    return false;
+}
+
+/**
+ * HTML sayfaları için CSP değeri.
+ *
+ * DÜRÜST SINIR: `script-src` ve `style-src` içinde `'unsafe-inline'` VAR ve
+ * kaldırılamıyor — panelde 36, temalarda 6 satır içi `<script>` bloğu ve 97
+ * satır içi `style` özniteliği var. Bunları nonce'a çevirmek çekirdek bir
+ * yeniden yazımdır. Dolayısıyla bu CSP **XSS savunması değildir**; XSS savunması
+ * `inc/sanitize.php`'dir.
+ *
+ * Yine de gerçek şeyler kapatır ve bunlar ölçülebilir:
+ *   · DIŞ betik yüklenemez (proje zaten hiç dış kaynak kullanmaz — ölçüldü: 0)
+ *   · `object`/`embed` tümüyle yasak
+ *   · `<base>` etiketiyle göreli adresler kaçırılamaz
+ *   · Form başka bir siteye gönderilemez
+ *   · Sayfa yabancı bir siteye gömülemez (tıklama hırsızlığı)
+ *   · `iframe` yalnız beyaz listedeki video sağlayıcılarına açık
+ */
+function manset_csp_value() {
+    static $csp = null;
+    if ($csp !== null) { return $csp; }
+
+    $frame = "'self'";
+    if (function_exists('sanitize_allowed_iframe_hosts')) {
+        foreach (sanitize_allowed_iframe_hosts() as $h) { $frame .= ' https://' . $h; }
+    }
+
+    // Tema Google Fonts kullanabiliyor (theme_font_link) — başka dış köken yok.
+    $yazitipi = "'self' data: https://fonts.gstatic.com";
+    $stil     = "'self' 'unsafe-inline' https://fonts.googleapis.com";
+
+    // `img-src` GENİŞ: haber görseli, reklam görseli ve RSS'ten içe aktarılan
+    // görsel uzak adres olabilir. Görsel yükleme kod çalıştırmaz; buradaki
+    // genişlik betik genişliğiyle aynı şey değildir.
+    return $csp = "default-src 'self'; "
+        . "script-src 'self' 'unsafe-inline'; "
+        . "style-src " . $stil . "; "
+        . "font-src " . $yazitipi . "; "
+        . "img-src 'self' data: https: http:; "
+        . "media-src 'self' https:; "
+        . "connect-src 'self'; "
+        . "frame-src " . $frame . "; "
+        . "object-src 'none'; "
+        . "base-uri 'self'; "
+        . "form-action 'self'; "
+        . "frame-ancestors 'self'";
+}
+
+
 function esc($s) { return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 /** Öznitelik kaçışı (esc ile aynı, okunabilirlik için ayrı ad). */
 function esc_attr($s) { return esc($s); }
@@ -593,6 +727,8 @@ function json_body() {
 }
 /** JSON yanıtı yazıp sonlandırır. */
 function json_out($data, $code = 200) {
+    // JSON yanıtı hiçbir şey gömmez ve hiçbir şeye gömülmemeli.
+    manset_security_headers('json');
     if (!headers_sent()) {
         http_response_code($code);
         header('Content-Type: application/json; charset=utf-8');

@@ -386,10 +386,41 @@ $maddeler[] = kontrol_madde(
     $cronSon === '' ? 'olumsuz' : ($cronYas > 86400 ? 'olumsuz' : ($cronYas > 7200 ? 'uyari' : 'olumlu')),
     $cronSon === '' ? 'hiç çalışmamış' : ('son tur ' . tr_ago($cronSon)),
     'Zamanlanmış haberlerin yayımlanması, RSS çekimi, yapay zekâ kuyruğu, önbellek '
-  . 'süpürmesi ve analitik toplaması buna bağlıdır. Çalışmıyorsa hiçbiri hata vermez, '
-  . 'yalnız hiç olmaz — bu yüzden en sinsi arızadır. Hosting panelinizden '
-  . 'cron.php adresini dakikada/saatte bir çağırmanız gerekir.',
+  . 'süpürmesi, analitik toplaması, medya varyantlarının üretilmesi ve etiket '
+  . 'eşitlemesi buna bağlıdır. Çalışmıyorsa hiçbiri hata vermez, yalnız hiç olmaz — '
+  . 'bu yüzden en sinsi arızadır. Hosting panelinizden cron.php adresini '
+  . 'dakikada/saatte bir çağırmanız gerekir.',
     admin_url('tools'), 'Araçlar →');
+
+/* 8b) İlk cron turu bekleyen işler ---------------------------------------- */
+// NEDEN AYRI MADDE: cron "kurulu" ama HENÜZ KOŞMAMIŞ bir sitede etiket bulutu
+// boş, görsel varyantları eksik görünür. Yayıncı bunu "özellik çalışmıyor" diye
+// okur ve aramaya başlar. Toplu doldurmayı kuruluma yıkmak yerine cron'a
+// bırakmak doğru karardır — ama bunu SÖYLEMEK gerekir.
+$bekleyen = [];
+if (schema_has_table('post_tags') && schema_has_table('posts')) {
+    $etiketliHaber = (int)qv('SELECT COUNT(*) FROM posts WHERE tags <> \'\'', [], 0);
+    $esitlenen     = (int)qv('SELECT COUNT(DISTINCT post_id) FROM post_tags', [], 0);
+    if ($etiketliHaber > 0 && $esitlenen < $etiketliHaber) {
+        $bekleyen[] = 'etiket bulutu (' . ($etiketliHaber - $esitlenen) . ' haber)';
+    }
+}
+if (schema_has_column('media', 'variant_state')) {
+    $kuyruk = (int)qv('SELECT COUNT(*) FROM media WHERE variant_state = \'queued\'', [], 0);
+    if ($kuyruk > 0) { $bekleyen[] = 'görsel varyantı (' . $kuyruk . ' dosya)'; }
+}
+if ($bekleyen) {
+    $maddeler[] = kontrol_madde(
+        'İlk cron turunu bekleyenler',
+        'uyari',
+        implode(' · ', $bekleyen),
+        'Bu işler bilerek arka plana bırakılır: kurulum ya da toplu içerik aktarımı '
+      . 'sırasında hepsini yapmak isteği dakikalarca bekletir ve paylaşımlı hostingde '
+      . 'zaman aşımına düşürür. Cron bir kez çalıştığında kendiliğinden tamamlanırlar. '
+      . 'O ana kadar etiket bulutu eksik, bazı görseller özgün boyutunda görünür — '
+      . 'site çalışır, yalnız tamamlanmamıştır.',
+        admin_url('tools'), 'Araçlar →');
+}
 
 /* 9) Analitik ------------------------------------------------------------- */
 // inc/analytics.php yüklenmemiş bir kurulumda (modül dosyası silinmişse) bu

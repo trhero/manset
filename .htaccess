@@ -28,8 +28,22 @@ DirectoryIndex index.php index.html
 </IfModule>
 
 <IfModule mod_headers.c>
+  # NOT: ASIL kaynak PHP tarafıdır (inc/bootstrap.php → manset_security_headers()).
+  # Burası yalnız ikinci katman: PHP'den geçmeyen STATİK dosyalar (CSS, JS,
+  # görsel) da bu başlıkları alsın diye. nginx/IIS'te bu dosya hiç okunmaz —
+  # o yüzden buraya güvenilmez, PHP tarafı her koşulda yazar.
   Header set X-Content-Type-Options "nosniff"
   Header set Referrer-Policy "strict-origin-when-cross-origin"
+  Header set X-Frame-Options "SAMEORIGIN"
+  Header set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+
+  # HSTS yalnız HTTPS isteğinde gönderilir. HTTP üzerinden göndermek anlamsızdır
+  # (tarayıcı yok sayar) ve http ile çalışan bir geliştirme/iç ağ kurulumunda
+  # alan adını tarayıcıda kilitleyip siteyi erişilemez yapabilir.
+  # `preload` BİLEREK yok: preload listesine girmek geri alınamaz bir karardır.
+  <If "%{HTTPS} == 'on'">
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  </If>
 </IfModule>
 
 # ---------------------------------------------------------------- güvenlik

@@ -18,6 +18,9 @@
  *   php tests/probe.php <kök> backup_secret
  *   php tests/probe.php <kök> mysql_ping
  *   php tests/probe.php <kök> paywall_leak
+ *   php tests/probe.php <kök> guvenlik_basliklari
+ *   php tests/probe.php <kök> cors
+ *   php tests/probe.php <kök> bagimlilik
  *
  * NEDEN AYRI BETİK: kabuktan `php -r` ile kod göndermek Git Bash'te kırılgan —
  * MSYS yol dönüşümü yalnız ARGÜMAN konumundaki yolları çevirir, kod dizesinin
@@ -317,6 +320,66 @@ switch ($soru) {
            ':b' => (string)arr($yedek, 'body', ''), ':i' => $pid]);
 
         echo implode(',', array_unique($sizinti));
+        break;
+
+    case 'guvenlik_basliklari':
+        // GUVENLIK BASLIKLARI KAYNAKTA TANIMLI MI?
+        //
+        // Baslik degerleri PHP tarafinda uretilir (manset_security_headers).
+        // Sonda HTTP atmaz — e2e zaten canli olcum yapiyor; buradaki is,
+        // baslik uretiminin KODDAN silinmedigini/bozulmadigini yakalamak.
+        $eksik = [];
+        if (!function_exists('manset_security_headers')) { echo 'ISLEV_YOK'; break; }
+        $csp = manset_csp_value();
+        $q = chr(39);
+        foreach (['default-src',
+                  'object-src ' . $q . 'none' . $q,
+                  'base-uri ' . $q . 'self' . $q,
+                  'form-action ' . $q . 'self' . $q,
+                  'frame-ancestors ' . $q . 'self' . $q] as $parca) {
+            if (strpos($csp, $parca) === false) { $eksik[] = $parca; }
+        }
+        // Gomulu video saglayicilari frame-src'de olmali, yoksa gomme kirilir.
+        if (function_exists('sanitize_allowed_iframe_hosts')) {
+            foreach (sanitize_allowed_iframe_hosts() as $h) {
+                if (strpos($csp, $h) === false) { $eksik[] = 'frame-src:' . $h; break; }
+            }
+        }
+        echo implode(',', $eksik);
+        break;
+
+    case 'cors':
+        // CORS ACIK MI?
+        //
+        // Proje HICBIR yerde Access-Control-Allow-* yazmaz; tarayici varsayilani
+        // ayni-kokendir ve JSON uclari boylece kilitlidir. Bu bir KARAR, kaza
+        // degil: birinin ileride "kolay olsun" diye yildiz koymasi, oturum
+        // cerezli her ucu her siteye acardi.
+        $bulunan = [];
+        $tara = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
+        foreach ($tara as $dosya) {
+            $yol = str_replace('\\', '/', $dosya->getPathname());
+            if (substr($yol, -4) !== '.php') { continue; }
+            if (strpos($yol, '/tests/') !== false) { continue; }
+            $src = (string)file_get_contents($yol);
+            if (stripos($src, 'Access-Control-Allow') !== false) { $bulunan[] = basename($yol); }
+        }
+        echo implode(',', array_unique($bulunan));
+        break;
+
+    case 'bagimlilik':
+        // DIS BAGIMLILIK SIZDI MI?
+        //
+        // CONTRACTS 0: Composer/npm YOK. "Paketleri denetle" maddesinin bu
+        // projedeki karsiligi, denetlenecek paket OLMADIGINI dogrulamaktir —
+        // bagimlilik sayisi sifirsa tedarik zinciri yuzeyi de sifirdir.
+        $iz = [];
+        foreach (['composer.json', 'composer.lock', 'package.json', 'package-lock.json',
+                  'yarn.lock', 'vendor', 'node_modules'] as $ad) {
+            if (file_exists($root . '/' . $ad)) { $iz[] = $ad; }
+        }
+        echo implode(',', $iz);
         break;
 
     default:

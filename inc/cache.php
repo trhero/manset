@@ -654,9 +654,10 @@ function cache_serve($key) {
         // render() ile aynı güvenlik başlıkları — bu yol render()'ı atladığı için
         // başlıklar burada yeniden verilmek zorunda.
         header('Content-Type: ' . $meta['ct']);
-        header('X-Content-Type-Options: nosniff');
-        header('Referrer-Policy: strict-origin-when-cross-origin');
-        header('X-Frame-Options: SAMEORIGIN');
+        // Bu yol render()'ı ATLAR; başlıklar burada yeniden verilmek zorunda.
+        // Tek kaynaktan çağrılır, yoksa önbellekten sunulan sayfa CSP'siz kalırdı
+        // — yani sitenin ÇOĞU sayfası korumasız olurdu.
+        manset_security_headers('html');
         header('X-Manset-Cache: HIT');
         header('X-Manset-Cache-Age: ' . max(0, time() - $created));
         header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $created) . ' GMT');
