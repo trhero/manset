@@ -68,8 +68,8 @@ jobs:
           done < <(find . -name '*.php' \
                      -not -path './.git/*' \
                      -not -path './dist/*' \
-                     -not -path './audit2/*' \
-                     -not -path './tests/.run/*' | sort)
+                     -not -path './audit*/*' \
+                     -not -path './tests/.run*/*' | sort)
           echo "${adet} PHP dosyası denetlendi."
           exit $hata
 
@@ -99,9 +99,9 @@ jobs:
         if: failure()
         run: |
           echo '--- tests/.server.log (son 200 satır) ---'
-          tail -200 tests/.server.log 2>/dev/null || echo '(günlük yok)'
+          tail -200 tests/.t-${PORT}.server.log 2>/dev/null || echo '(günlük yok)'
           echo '--- db/error.log (son 100 satır) ---'
-          tail -100 tests/.run/db/error.log 2>/dev/null || echo '(günlük yok)'
+          tail -100 tests/.run-${PORT}/db/error.log 2>/dev/null || echo '(günlük yok)'
 
   # ==========================================================================
   # MySQL yolu — ayrı iş, tek PHP sürümü
@@ -187,21 +187,21 @@ jobs:
       # ------------------------------------------------------------------
       # Uçtan uca (MySQL)
       #
-      # BAĞLANMA NOKTASI: tests/e2e.sh şu an kurulum sihirbazına db_driver=sqlite
-      # gönderir (bkz. e2e.sh "3 · Kurulum sihirbazı"). Orkestratör oraya
-      # --driver=mysql desteğini ekleyecek; beklenen davranış:
+      # `tests/e2e.sh` `--driver=mysql` bayrağını DESTEKLER: kurulum sihirbazına
+      # db_driver ve MANSET_DB_* bağlantı alanlarını gönderir (bkz. e2e.sh §3).
       #
-      #   1. --driver=mysql verilince e2e, kurulumdan ÖNCE
-      #      `php tests/mysql-kur.php --bos --bekle=60` çağırır (boş şema).
-      #   2. install/?adim=2 formuna sqlite yerine
-      #      db_driver=mysql, db_host/db_port/db_name/db_user/db_pass alanlarını
-      #      MANSET_DB_* ortam değişkenlerinden doldurur.
-      #   3. SQLite'a özgü iddialar (db/*.sqlite dosya adı denetimi gibi)
-      #      bu kipte atlanır.
+      # BU İŞ, MySQL YOLUNUN TEK GERÇEK SINAVIDIR. Geliştirme makinesinde MySQL
+      # sunucusu yok; 1.1'den 1.3'e kadar MySQL yalnız kod okunarak "çalışmalı"
+      # sayıldı. Buradaki koşu kırmızı yanarsa, sorun testte değil ÜRÜNDEDİR.
       #
-      # Bayrak inene kadar adım "atlandı" der ve işi kırmızıya çevirmez;
-      # e2e.sh --driver'ı tanır tanımaz kendiliğinden gerçek koşuya geçer.
-      # ------------------------------------------------------------------
+      # Bilinen sürücü farkları (kırmızı gelirse önce bunlara bakın):
+      #   - `rowCount()` semantiği: MySQL güncellenen satırı DEĞİŞMEDİYSE saymaz.
+      #     1.2'de hediye kotası ve ödeme idempotansı bu desene dayanıyor.
+      #   - `LIKE` kaçışında `ESCAPE` yan tümcesi.
+      #   - FULLTEXT en küçük sözcük uzunluğu (varsayılan 3-4) Türkçe kısa
+      #     sözcükleri düşürür.
+      #   - Kesin olmayan (non-strict) kip dışında uzun dizeler HATA verir,
+      #     SQLite'ta sessizce kısalırdı.
       - name: Uçtan uca testler (MySQL)
         run: |
           if grep -q -- '--driver' tests/e2e.sh; then
@@ -217,5 +217,5 @@ jobs:
       - name: Başarısızlıkta sunucu günlüğü
         if: failure()
         run: |
-          echo '--- tests/.server.log (son 200 satır) ---'
-          tail -200 tests/.server.log 2>/dev/null || echo '(günlük yok)'
+          echo '--- sunucu günlüğü (son 200 satır) ---'
+          tail -200 tests/.t-${PORT}.server.log 2>/dev/null || echo '(günlük yok)'

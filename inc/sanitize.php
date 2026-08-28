@@ -37,10 +37,19 @@ function sanitize_allowed_tags() {
         'figure'     => ['class'],
         'figcaption' => [],
         'table'      => [],
+        // GENİŞLETME (1.3-03, Ajan-G): `caption` ve `th@scope`.
+        // NEDEN GÜVENLİ: `caption` ÖZNİTELİK ALMAZ (boş liste) ve yalnız metin
+        // taşır — yeni bir URL, olay ya da stil yüzeyi açmaz. `scope` ise
+        // kapalı bir sözcük kümesidir (row/col/rowgroup/colgroup) ve aşağıda
+        // TAM EŞLEŞME ile doğrulanır; eşleşmeyen değer özniteliği düşürür.
+        // Erişilebilir veri tablosu (WCAG 1.3.1) başlık hücresini `scope` ile
+        // ilan etmek zorundadır; olmadan ekran okuyucu sütunu okuyamaz.
+        'caption'    => [],
         'thead'      => [],
         'tbody'      => [],
+        'tfoot'      => [],
         'tr'         => [],
-        'th'         => ['colspan', 'rowspan'],
+        'th'         => ['colspan', 'rowspan', 'scope'],
         'td'         => ['colspan', 'rowspan'],
         'iframe'     => ['src', 'width', 'height', 'allow', 'allowfullscreen', 'title', 'frameborder'],
         'span'       => ['class'],
@@ -106,10 +115,26 @@ function sanitize_html($html, $allowIframe = true) {
     $html = preg_replace('/<!--.*?-->/s', '', $html);
 
     if (!class_exists('DOMDocument')) {
-        // DOM eklentisi yoksa kaba yedek: yalnız etiket beyaz listesi
-        $allowed = '<' . implode('><', array_keys(sanitize_allowed_tags())) . '>';
-        $out = strip_tags($html, $allowed);
-        return preg_replace('/\s(on\w+|style|formaction|xlink:href)\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $out);
+        // DOM YOKSA HİÇ ETİKET GEÇMEZ (denetim turu 5, B1).
+        //
+        // Buradaki eski yedek `strip_tags()` + olay özniteliklerini silen bir
+        // düzenli ifadeydi. Denetçi onu birebir çalıştırıp DÖRT atlatma kanıtladı:
+        //   <a href="javascript:alert(1)">          geçiyordu
+        //   <iframe src="https://evil.test/">       geçiyordu
+        //   srcset="javascript: 1x"                 geçiyordu
+        //   <a href="/x"onmouseover=alert(1)>       BOŞLUKSUZ öznitelik, geçiyordu
+        // Sonuncusu doğrudan saklanmış XSS'tir.
+        //
+        // Düzenli ifadeyle HTML temizlemek güvenli hâle GETİRİLEMEZ; kapatılan her
+        // desen için yenisi bulunur. Bu yüzden yol iyileştirilmedi, KAPATILDI:
+        // etiketlerin tümü atılır ve düz metin döner. Biçimlendirme kaybı görünür
+        // ve şikâyet edilir; sessiz bir XSS kapısı görünmez.
+        //
+        // `ext/dom` artık kurulum sihirbazında ZORUNLU aranıyor — bu dal yalnız
+        // eklentisi sonradan kaldırılan bir kurulumda çalışır.
+        log_error('sanitize_html: ext/dom yok - HTML duz metne indirgendi. '
+                . 'Bicimlendirme kaybi yasamamak icin dom eklentisini acin.');
+        return esc(trim(strip_tags($html)));
     }
 
     $allowedTags = sanitize_allowed_tags();
@@ -206,7 +231,7 @@ function sanitize_walk(DOMNode $node, array $allowedTags, array $allowedClasses,
                         // HAM NUL ve DEL baytları vardı; PCRE deseni 'range out of order'
                         // ile reddedip null döndürüyor, kapı tamamen ölü kalıyordu.
                         // Kaçışlı biçim: tüm denetim karakterleri ve boşluk atılır.
-                        preg_replace('/[ - ]/', '', $av))) {
+                        preg_replace('/[\x00-\x20\x7F]/', '', $av))) {
                     $child->removeAttribute('srcset');
                     continue;
                 }
@@ -244,6 +269,17 @@ function sanitize_walk(DOMNode $node, array $allowedTags, array $allowedClasses,
                 $n = (int)preg_replace('/\D+/', '', $av);
                 if ($n <= 0) { $child->removeAttribute($attr->nodeName); }
                 else { $child->setAttribute($an, (string)min($n, 4000)); }
+                continue;
+            }
+            if ($an === 'scope') {
+                // KAPALI SÖZCÜK KÜMESİ — dizeden hiçbir parça korunmaz,
+                // yalnız tam eşleşen bilinen değerlerden biri yeniden yazılır.
+                $sv = strtolower(trim($av));
+                if (in_array($sv, ['row', 'col', 'rowgroup', 'colgroup'], true)) {
+                    $child->setAttribute('scope', $sv);
+                } else {
+                    $child->removeAttribute($attr->nodeName);
+                }
                 continue;
             }
             if ($an === 'target') {

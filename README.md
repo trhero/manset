@@ -390,6 +390,9 @@ yapay zekâ üretimi rozeti, içerik üzerinde yayım ve güncelleme tarihi.
 - **Oturum:** `httponly` + `samesite=Lax` + HTTPS'te `secure`; girişte `session_regenerate_id`.
 - **SSRF:** RSS ve harici JSON adreslerinde şema/host doğrulaması; `localhost`, özel ve
   ayrılmış IP aralıkları reddedilir; yönlendirme takibi sınırlı.
+- **HTML temizleme:** `ext/dom` **zorunludur**. Eklenti yoksa haber gövdesindeki
+  tüm biçimlendirme atılır (güvenli taraf) — düzenli ifadeyle HTML temizlemek
+  güvenli hâle getirilemez.
 - **Yükleme:** Uzantı **ve** gerçek MIME doğrulaması, SVG reddi, çift uzantı koruması,
   rastgele dosya adı, `uploads/` içinde PHP çalıştırma kapalı.
 - **Dosya erişimi:** `db/` ve `inc/` için `Require all denied`; SQLite dosya adı rastgele

@@ -4,6 +4,109 @@ Bu proje [Anlamsal Sürümleme](https://semver.org/lang/tr/) kurallarını izler
 
 ## [Yayımlanmadı]
 
+## [1.3.0] — "Haber odası"
+
+1.2 geliri ve görünürlüğü getirmişti; 1.3 **haberi üreten insanların gününü**
+hedefliyor: geri alınabilirlik, onay akışı, daha iyi editör, gerçek arama.
+
+> **Yükseltme notu.** Dosyaları FTP ile üstüne attıktan sonra panele bir kez
+> girin; şema kendiliğinden güncellenir ve öncesinde yedek alınır.
+> **Yeni zorunlu gereksinim: `ext/dom`** (aşağıya bakın).
+
+### Geri alınabilirlik ve onay akışı
+- **Sürüm geçmişi**: her kayıt tam kopya olarak saklanır (son 20), önizlenip geri
+  yüklenebilir. Geri yükleme de bir sürüm üretir — o da geri alınabilir.
+- **30 saniyede bir otomatik kayıt.** Yayımlanmış içeriği DEĞİŞTİRMEZ: taslak
+  kopya olarak durur, yoksa yarım cümle canlıya çıkardı.
+- **"Başkası düzenliyor" kilidi**: zaman aşımına uğrar (tarayıcısı çöken editör
+  yazıyı sonsuza dek kilitlemez) ve açık uyarıyla devralınabilir.
+- **Onay akışı**: habere bağlı notlar, "revizyon iste" durumu, `published_by`
+  kaydı (kimin yayımladığı artık izleniyor), haftalık yayın takvimi.
+
+### Editör
+- **Gömme**: YouTube ve Vimeo `iframe` ile; **X ve Instagram betiksiz bağlantı
+  kartıyla** — `<script>` gömme kabul edilmedi. oEmbed istekleri SSRF kalkanından
+  geçer ve önbelleğe alınır.
+- Tablo ekleme, Word/Docs'tan **temizleyerek yapıştırma**, Ctrl+S.
+- **Taslak önizleme bağlantısı**: imzalı, süreli, tek habere özel, `noindex`,
+  oturum açmaz. Bağlantıyı üreten hesap kapatılırsa bağlantı da ölür.
+
+### Yapay zekâ
+- **YZ denetim ekranı**: kaynak metin ile YZ çıktısı yan yana, fark vurgulu.
+- `auto_publish + ai_rewrite` açıkken **"insan onayı olmadan yayın" uyarı rozeti** —
+  arayüz bunu 1.0'dan beri hiç söylemiyordu.
+- Seçili metni yeniden yaz/kısalt, özet, kategori+etiket önerisi, görsel alt metni.
+
+### Arama
+- **Gövde artık aranıyor.** SQLite'ta FTS5, MySQL'de FULLTEXT, ikisi de yoksa
+  `LIKE`'a düşer — arama hiçbir kurulumda bozulmaz, yalnız daha iyi ya da daha
+  basit olur.
+- **Türkçe katlama**: `unicode61` çözücüsü `I→i` yapar ama `ı`'yı olduğu gibi
+  bırakır; "Işık" metni "ışık" sorgusuyla bile bulunamıyordu. Dizine katlanmış
+  metin yazılıyor.
+- Vurgu, tarih ve kategori süzgeci, etiketlerin `post_tags` ile normalizasyonu.
+
+### Okur
+- **Keşif sayfaları**: yazar sayfası, tarih arşivi (`/arsiv/2026/08`), etiket
+  bulutu; haber sonunda önceki/sonraki ve **etiket kesişimiyle** ilgili haberler.
+- **Yorumlar**: tek seviye yanıt, sayfalama, bildir, kara liste (e-posta/IP/sözcük),
+  üye ve personel rozeti — rozet oturum açmadan üretilir, önbellek korunur.
+
+### Hız ve işletim
+- **Önbellek kapsam indeksi**: bir haber değişince artık bütün site değil, o
+  haberi gösteren sayfalar düşer. Ölçüm: dar düşüş 5 sayfadan 2'sini düşürdü,
+  eski davranış 6'dan 5'ini siliyordu.
+- **Medya varyantları kuyrukta üretiliyor**: 5,9 MB / 4000×3000 bir görselin
+  yükleme süresi **6043 ms → 3360 ms** (%44). Varyant hazır değilken ön yüz
+  özgün görseli gösterir; hiçbir aşamada kırık görsel çıkmaz.
+- **Manşet**: sürükle-bırak **ve klavyeyle** sıralama, zamanlı manşet, manşete
+  özel kısa başlık.
+- **RSS**: çapraz kaynak tekrar tespiti, kaynak başına aralık, görseli içe aktarma,
+  havuzda gövde önizleme.
+
+### Güvenlik — denetim turu 5
+- **KRİTİK: ödeme duvarı arama ucundan tamamen atlanıyordu.** `search.query`
+  kilitli haberlerin gövdesinden alıntı üretip anonime döndürüyordu; alıntı
+  penceresi arama terimiyle kaydığı için metin yürüyerek tamamen çıkarılabiliyordu.
+  Tur 2'de beslemelerde kapatılan sınıfın yeni bir uçta tekrarı. Kapatıldı ve
+  `probe paywall_leak` ile kalıcı kapıya bağlandı.
+- **`ext/dom` artık zorunlu.** Temizleyicinin DOM'suz yedek yolunda dört atlatma
+  kanıtlandı (biri doğrudan saklanmış XSS). Yol iyileştirilmedi, **kapatıldı**:
+  düzenli ifadeyle HTML temizlemek güvenli hâle getirilemez. DOM yoksa tüm
+  etiketler atılır. Kurulum sihirbazı eklentiyi eskiden **hiç aramıyordu**.
+- Pasifleştirilen hesabın önizleme bağlantısı artık ölüyor.
+- Yorum kara listesi 190 baytta kör kalıyordu; yasaklı sözcüğü sonra yazan yorum
+  yayına giriyordu.
+- Anonim arama önbelleği şişiriyor ve gerçek trafiğin sayfalarını tahliye
+  ediyordu; terimli arama artık önbelleğe alınmaz.
+
+### Düzeltmeler
+- **`schema_has_column()` / `schema_has_table()` her bağlamda yüklü değildi.**
+  43 çağrı `function_exists()` ile korunuyordu ve koruma tuttuğunda kod
+  **sessizce yanlış dala** düşüyordu: çöp kutusu süzgeci hiç uygulanmıyor,
+  yorum silme yanıtları arkada bırakıyordu. İkisi de `inc/bootstrap.php`'ye taşındı.
+- **Önbellek temizlik damgası saniye çözünürlüklüydü**; temizlikten hemen sonraki
+  istek sayfayı hiç önbelleğe yazamıyordu. Canlı sitede her içerik yazımı bir
+  temizlik tetiklediği için o saniyedeki her sayfa boşa üretiliyordu.
+- Eski `public.comment` ucu kara listeyi bilmiyordu; yeni yola devredildi.
+- Yorum silmek yanıtları arkada bırakıyordu.
+- Boş etiket sayfası 200 + boş liste yerine 404 döner.
+- **`mb_strtolower('İ')` birleşen nokta üretiyor**; kara liste Türkçe büyük harfli
+  metinde sessizce hiç çalışmıyordu.
+- `.rozet-premium` kontrastının kalan bir örneği (3.25:1 → 5.32:1).
+
+### Test altyapısı
+- **MySQL yolunun önündeki engeller kaldırıldı.** CI iş akışındaki bayat yollar
+  (`audit2/`, `tests/.run/`, günlük dosyaları) düzeltildi; sürücüye göre eklenti
+  denetimi ve `probe mysql_ping` ile erken, anlaşılır bağlantı hatası eklendi.
+  **MySQL hâlâ hiç koşulmadı** — bu makinede sunucu yok; ilk gerçek koşu CI'da olacak.
+- e2e geçici dosyalarının tamamı porta bağlandı; `PORT+50` (RSS fikstürü) doluysa
+  ilk adımda söylenir — bu, bir ajanın beş sahte kırmızı almasına yol açmıştı.
+- `php -m` eklenti başına ayrı süreçle çağrılıyordu ve çok sayıda PHP süreci
+  altında **aralıklı boş çıktı** verip "eklenti kurulu değil" diyordu.
+- Yedek birim testleri geliştiricinin gerçek yedeklerini siliyordu.
+
+
 ## [1.2.0] — "Yayıncı paketi"
 
 1.1 zemini sağlamlaştırmıştı; 1.2 **gelir, görünürlük ve okur deneyimi** getiriyor.

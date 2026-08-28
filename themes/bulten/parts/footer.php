@@ -19,6 +19,13 @@ if (!defined('MANSET_BOOTSTRAPPED')) { exit; }
         <a href="<?= esc(url_page($p)) ?>"><?= esc($p['title']) ?></a>
       <?php endforeach; ?>
       <a href="<?= esc(base_url()) ?>/rss.php">RSS</a>
+      <?php /* 1.3-10: keşif sayfaları alt bilgiden de erişilebilir. */ ?>
+      <a href="<?= esc(url('etiketler')) ?>">Etiketler</a>
+      <?php if (function_exists('discover_archive_years')): $kesifYillar = discover_archive_years(); ?>
+        <?php if ($kesifYillar): ?>
+          <a href="<?= esc(url('arsiv/' . (int)array_key_first($kesifYillar))) ?>">Arşiv</a>
+        <?php endif; ?>
+      <?php endif; ?>
       <?php if (site('email')): ?><a href="mailto:<?= esc(site('email')) ?>"><?= esc(site('email')) ?></a><?php endif; ?>
     </nav>
 

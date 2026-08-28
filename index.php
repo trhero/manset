@@ -205,6 +205,12 @@ switch ($head) {
             }
         }
         $total = tag_posts_count($label);
+        // BOŞ ETİKET = YOK (1.3-10). Yalnız çöp kutusundaki ya da yayımlanmamış
+        // bir haberde geçen etiket, adı çözülebildiği için 200 + boş liste
+        // döndürüyordu. Sızıntı değil — ad zaten `published_where()` ile
+        // süzülüyor — ama "yok" ile "boş" ayrımını netleştirir ve tarayıcıya
+        // var olmayan bir adres kümesi sunmayı bırakır.
+        if ($total < 1) { render_404('Bu etikete ait haber bulunamadı.'); }
         render('search', [
             'heading' => 'Etiket: ' . $label,
             'term'    => $label,
@@ -214,6 +220,31 @@ switch ($head) {
             'page'    => $page,
             'perPage' => $perPage,
         ]);
+        break;
+
+    // ------------------------------------------------- keşif sayfaları (1.3-10)
+    // Rotalar ORKESTRATÖR tarafından açıldı; sayfaları üreten işlevler
+    // `inc/discover.php` içindedir. Modül yoksa bu adresler 404 döner —
+    // yani kanca tek başına hiçbir davranış değiştirmez.
+    case 'yazar':
+        $slug = isset($segments[1]) ? rawurldecode($segments[1]) : '';
+        if ($slug === '' || !function_exists('discover_author_view')) { render_404(); }
+        discover_author_view($slug, $page, $perPage);
+        break;
+
+    case 'arsiv':
+        // /arsiv/2026 · /arsiv/2026/08
+        if (!function_exists('discover_archive_view')) { render_404(); }
+        discover_archive_view(
+            isset($segments[1]) ? (int)$segments[1] : 0,
+            isset($segments[2]) ? (int)$segments[2] : 0,
+            $page, $perPage
+        );
+        break;
+
+    case 'etiketler':
+        if (!function_exists('discover_tagcloud_view')) { render_404(); }
+        discover_tagcloud_view();
         break;
 
     // ---------------------------------------------------------------- sabit sayfa

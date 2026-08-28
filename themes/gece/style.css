@@ -618,3 +618,80 @@ html[data-goruntu="acik"] .okuma-ayar-panel{box-shadow:0 10px 26px rgba(0,0,0,.1
     animation:none!important;
   }
 }
+
+/* ================================================================ keşif sayfaları (1.3-10)
+   /yazar/… · /arsiv/… · /etiketler ve haber sonu "önceki / sonraki" şeridi.
+
+   KONTRAST KURALI: buradaki hiçbir renk sabit yazılmadı. Yüzey, metin, soluk
+   metin ve çizgi YALNIZ temanın belirteçlerinden alınır. O belirteçler
+   html[data-goruntu="koyu"] altında zaten ÖLÇÜLMÜŞ koyu değerlerle yeniden
+   tanımlanıyor (bkz. dosyanın koyu mod bölümü), dolayısıyla yeni ögeler için
+   ikinci bir koyu palet yazılmadı — iki palet zamanla ayrışırdı. Marka rengi
+   bilerek kullanılmadı: yayıncının seçtiği serbest renk koyu zeminde 4.5:1
+   garanti etmez.
+   Ölçüm: bu dosyanın koyu mod başlığındaki metin/yüzey ve soluk/yüzey
+   oranları aynen geçerlidir; seçili öge ters çevrilmiş çifttir (aynı oran). */
+
+.kesif-ust{margin-bottom:16px}
+.kesif-ust h1{margin:0}
+.kesif-sayi{color:var(--renk-soluk);font-size:14px;margin:6px 0 0}
+.kesif-bos{color:var(--renk-soluk);margin:18px 0}
+.kesif-izgara{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:18px}
+.kesif-baglantilar{display:flex;gap:16px;flex-wrap:wrap;margin:24px 0 4px}
+.kesif-baglantilar a{color:var(--renk-metin);text-decoration:underline;font-size:14px}
+
+/* --- yazar künyesi */
+.yazar-kunye{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.yazar-avatar{width:72px;height:72px;border-radius:50%;object-fit:cover;background:var(--renk-cizgi);flex:0 0 auto}
+.yazar-bilgi{flex:1 1 240px;min-width:0}
+.yazar-rol{margin:2px 0 6px;color:var(--renk-soluk);font-size:14px}
+.yazar-bio{margin:0;max-width:62ch;line-height:1.6}
+/* Haber üstündeki yazar adı artık bağlantı olabiliyor. */
+a.yazar{color:var(--renk-metin);text-decoration:underline;text-underline-offset:2px}
+a.yazar:hover,a.yazar:focus-visible{text-decoration-thickness:2px}
+
+/* --- arşiv gezinmesi */
+.arsiv-gezinme{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px;padding:10px 12px;
+  background:var(--renk-yuzey);border:1px solid var(--renk-cizgi);border-radius:var(--kose)}
+.arsiv-etiket{color:var(--renk-soluk);font-size:13px}
+.arsiv-oge{display:inline-flex;gap:5px;align-items:baseline;padding:4px 9px;border-radius:var(--kose);
+  border:1px solid var(--renk-cizgi);color:var(--renk-metin);text-decoration:none;font-size:14px;line-height:1.3}
+a.arsiv-oge:hover,a.arsiv-oge:focus-visible{border-color:var(--renk-metin);text-decoration:underline}
+.arsiv-oge.secili{background:var(--renk-metin);color:var(--renk-yuzey);border-color:var(--renk-metin);font-weight:700}
+.arsiv-oge.secili .arsiv-adet{color:var(--renk-yuzey)}
+/* İçeriği olmayan ay: bağlantı DEĞİL (adres 404 döner), yalnız soluk metin. */
+.arsiv-oge.bos{color:var(--renk-soluk);border-style:dashed}
+.arsiv-adet{font-size:12px;color:var(--renk-soluk)}
+
+/* --- etiket bulutu (ağırlık yalnız PUNTO değiştirir, renk değil) */
+.etiket-bulutu{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:10px}
+.etiket-bulutu li{margin:0}
+.bulut-oge{display:inline-flex;align-items:baseline;gap:6px;padding:6px 11px;border-radius:var(--kose);
+  border:1px solid var(--renk-cizgi);background:var(--renk-yuzey);color:var(--renk-metin);
+  text-decoration:none;line-height:1.25}
+.bulut-oge:hover,.bulut-oge:focus-visible{border-color:var(--renk-metin);text-decoration:underline}
+.bulut-adet{font-size:12px;color:var(--renk-soluk)}
+.bulut-oge.a1{font-size:14px}
+.bulut-oge.a2{font-size:16px}
+.bulut-oge.a3{font-size:18px;font-weight:600}
+.bulut-oge.a4{font-size:21px;font-weight:700}
+.bulut-oge.a5{font-size:25px;font-weight:800}
+
+/* --- haber sonu: önceki / sonraki */
+.haber-gezinme{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:26px 0}
+.gezinme-oge{display:flex;flex-direction:column;gap:5px;padding:12px 14px;border:1px solid var(--renk-cizgi);
+  border-radius:var(--kose);background:var(--renk-yuzey);color:var(--renk-metin);text-decoration:none;min-width:0}
+a.gezinme-oge:hover,a.gezinme-oge:focus-visible{border-color:var(--renk-metin)}
+a.gezinme-oge:hover .gezinme-baslik,a.gezinme-oge:focus-visible .gezinme-baslik{text-decoration:underline}
+.gezinme-oge.bos{border:0;background:none;padding:0}
+.gezinme-yon{font-size:12px;color:var(--renk-soluk);letter-spacing:.03em;text-transform:uppercase}
+.gezinme-baslik{font-weight:700;line-height:1.35;overflow-wrap:anywhere}
+.gezinme-oge.sonraki{text-align:right}
+
+@media (max-width:640px){
+  .haber-gezinme{grid-template-columns:1fr}
+  .gezinme-oge.sonraki{text-align:left}
+  .gezinme-oge.bos{display:none}
+  .kesif-izgara{grid-template-columns:1fr}
+  .yazar-avatar{width:56px;height:56px}
+}

@@ -253,20 +253,6 @@ function schema_create_index($table, $name, $def) {
     }
 }
 
-/** Bir tabloda sütun var mı? */
-function schema_has_column($table, $column) {
-    try {
-        if (db_driver() === 'sqlite') {
-            foreach (qa('PRAGMA table_info(' . preg_replace('/[^a-z0-9_]/i', '', $table) . ')') as $c) {
-                if (strcasecmp($c['name'], $column) === 0) { return true; }
-            }
-            return false;
-        }
-        $r = q1('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c',
-            [':t' => $table, ':c' => $column]);
-        return (bool)$r;
-    } catch (Throwable $e) { return false; }
-}
 
 /** Sütun yoksa ekler. $def yer tutucu içerebilir. */
 function schema_add_column($table, $column, $def) {
@@ -276,15 +262,6 @@ function schema_add_column($table, $column, $def) {
     return true;
 }
 
-/** Bir tablo var mı? */
-function schema_has_table($table) {
-    try {
-        if (db_driver() === 'sqlite') {
-            return (bool)qv('SELECT name FROM sqlite_master WHERE type = \'table\' AND name = :t', [':t' => $table]);
-        }
-        return (bool)qv('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t', [':t' => $table]);
-    } catch (Throwable $e) { return false; }
-}
 
 /**
  * inc/migrations/*.php dosyalarını ada göre sıralı uygular.

@@ -42,6 +42,18 @@ function public_link_count($text) {
  * döner — bota/spam robotuna geri bildirim verilmez.
  */
 api_register('public.comment', function () {
+    // 1.3-07 DEVRİ: yanıt zinciri, personel rozeti ve KARA LİSTE tek yerde
+    // uygulanır. Bu uç 1.0'dan beri duruyor ve temalar artık `comments.submit`e
+    // gönderiyor; ama uç KAYITLI kaldığı sürece üçüncü taraf bir istemci ya da
+    // eski bir tema onu çağırabilir — ve bu sürüm kara listeyi BİLMİYOR.
+    // Yani susturulmuş bir e-posta buradan yorum yazmaya devam ederdi.
+    // Hız sınırı kovası ikisinde de aynı (`comment:<ip>`): ayrı olsaydı bir
+    // robot iki ucu sırayla kullanıp sınırı ikiye katlardı.
+    if (function_exists('comments_submit_handle')) {
+        $r = comments_submit_handle('public_field');
+        return ['message' => $r['message']];
+    }
+
     $ip = client_ip();
 
     // 1) Hız sınırı — CONTRACTS §3: comment:<ip> 3 / 300 sn

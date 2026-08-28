@@ -344,11 +344,27 @@ function post_select_columns($alias = 'p') {
 /** Manşetteki haberler (sıralı). */
 function headline_posts($limit = 6) {
     $limit = max(1, min(12, (int)$limit));
-    return qa('SELECT ' . post_select_columns() . ', c.name AS category_name, c.slug AS category_slug, c.color AS category_color
+
+    // MANŞETE ÖZEL KISA BAŞLIK (1.3-09). Sütun yoksa (göç 026 uygulanmamış)
+    // sorguya HİÇ girmez — eski kurulum bozulmaz. `post_select_columns()`'a
+    // EKLENMEZ: o işlev her yerde kullanılıyor ve göç uygulanmamış kurulumda
+    // bütün haber sorgularını düşürürdü.
+    $kisa = schema_has_column('posts', 'headline_title') ? ', p.headline_title' : '';
+
+    $rows = qa('SELECT ' . post_select_columns() . $kisa . ', c.name AS category_name, c.slug AS category_slug, c.color AS category_color
         FROM posts p LEFT JOIN categories c ON c.id = p.category_id
         WHERE p.is_headline = 1 AND ' . published_where() . '
         ORDER BY p.headline_sort ASC, p.published_at DESC LIMIT ' . $limit,
         [':nowts' => now()]);
+
+    // YALNIZ BU LİSTEDE `title` değiştirilir: manşet bloğu kısa başlığı basar,
+    // haber sayfası (post_by_slug) özgün başlığı okumaya devam eder.
+    // `url_post()` slug'a bakar; bağlantı ve SEO etkilenmez.
+    foreach ($rows as $i => $r) {
+        $k = trim((string)arr($r, 'headline_title', ''));
+        if ($k !== '') { $rows[$i]['title'] = $k; }
+    }
+    return $rows;
 }
 
 /** Son dakika işaretli haberler. */
@@ -475,6 +491,14 @@ function tag_posts_count($tag) {
 
 /** Aynı kategoriden ilgili haberler. */
 function related_posts($post, $limit = 4) {
+    // KANCA (1.3-10): akıllı ilgili haberler (etiket kesişimiyle puanlama).
+    // Çekirdek sürüm yalnız KATEGORİYE bakar. Beş çekirdek tema yeni işlevi
+    // doğrudan çağırıyor; bu devir ÜÇÜNCÜ TARAF temalar içindir — onlar
+    // `related_posts()` çağırmaya devam ediyor ve aksi hâlde iyileştirmeyi
+    // hiç görmezlerdi. Modül yoksa aşağıdaki kategori sorgusu aynen çalışır.
+    if (function_exists('discover_related_posts')) {
+        return discover_related_posts($post, $limit);
+    }
     if (!is_array($post)) { return []; }
     $limit = max(1, min(12, (int)$limit));
     return qa('SELECT ' . post_select_columns() . ', c.name AS category_name, c.slug AS category_slug, c.color AS category_color
@@ -484,10 +508,23 @@ function related_posts($post, $limit = 4) {
         [':c' => (int)$post['category_id'], ':i' => (int)$post['id'], ':nowts' => now()]);
 }
 
-/** Arama: başlık + spot + etiket. ['items'=>[], 'total'=>n] döner. */
+/**
+ * Arama: başlık + spot + etiket. ['items'=>[], 'total'=>n] döner.
+ *
+ * KANCA (1.3-06): tam metin arama modülü varsa ona devredilir — o, gövdeyi de
+ * arar ve alaka sırasına göre sıralar. Modül yoksa ya da o kurulumda FTS
+ * kullanılamıyorsa aşağıdaki LIKE sorgusu aynen çalışır: arama HİÇBİR
+ * kurulumda bozulmaz, yalnız daha iyi ya da daha basit olur.
+ */
 function search_posts($term, $page = 1, $perPage = 12) {
     $term = trim((string)$term);
     if (mb_strlen($term) < 2) { return ['items' => [], 'total' => 0]; }
+
+    if (function_exists('search_fts_query')) {
+        $fts = search_fts_query($term, $page, $perPage);
+        // null = "bu kurulumda FTS yok" → sessizce LIKE'a düş.
+        if (is_array($fts)) { return $fts; }
+    }
     $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $term) . '%';
     $perPage = max(1, min(50, (int)$perPage));
     $offset = max(0, ((int)$page - 1) * $perPage);

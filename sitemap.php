@@ -308,6 +308,28 @@ function sitemap_render_tags() {
         unset($rows);
     }
 
+
+    // KEŞİF SAYFALARI (1.3-10). Etiket bulutu ve tarih arşivi gerçek, gezilebilir
+    // sayfalardır; haritada olmazlarsa arama motoru onları hiç bulmaz ve
+    // içerdikleri iç bağlantılar da taranmaz.
+    //
+    // Yalnız İÇERİĞİ OLAN yıl/ay adresleri yazılır — boş bir adresi haritaya
+    // koymak, tarayıcıya var olmayan bir sayfa vaat etmektir.
+    if (function_exists('discover_archive_years')) {
+        sitemap_out(sitemap_url_node(url('etiketler'), '', 'weekly', '0.3'));
+        foreach ((array)discover_archive_years() as $y) {
+            $yil = (int)(is_array($y) ? arr($y, 'yil', arr($y, 'y', 0)) : $y);
+            if ($yil < 1990 || $yil > (int)date('Y')) { continue; }
+            sitemap_out(sitemap_url_node(url('arsiv/' . $yil), '', 'monthly', '0.3'));
+            if (!function_exists('discover_archive_months')) { continue; }
+            foreach ((array)discover_archive_months($yil) as $m) {
+                $ay = (int)(is_array($m) ? arr($m, 'ay', arr($m, 'm', 0)) : $m);
+                if ($ay < 1 || $ay > 12) { continue; }
+                sitemap_out(sitemap_url_node(url('arsiv/' . $yil . '/' . sprintf('%02d', $ay)), '', 'monthly', '0.2'));
+            }
+        }
+    }
+
     sitemap_out('</urlset>' . "\n");
 }
 

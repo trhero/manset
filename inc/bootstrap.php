@@ -7,7 +7,7 @@
 
 if (defined('MANSET_BOOTSTRAPPED')) { return; }
 define('MANSET_BOOTSTRAPPED', true);
-define('MANSET_VERSION', '1.2.0');
+define('MANSET_VERSION', '1.3.0');
 define('ROOT_DIR', dirname(__DIR__));
 define('INC_DIR', ROOT_DIR . '/inc');
 define('DB_DIR', ROOT_DIR . '/db');
@@ -676,6 +676,48 @@ function manset_exception_handler($e) {
 set_exception_handler('manset_exception_handler');
 
 /**
+ * ŞEMA YOKLAMA YARDIMCILARI — 1.3'te inc/schema.php'den BURAYA taşındı.
+ *
+ * NEDEN: bu iki işlev "sütun/tablo var mı" diye sorar ve göç uygulanmamış
+ * kurulumlarda kodun doğru dala düşmesini sağlar. Ama inc/schema.php her
+ * bağlamda YÜKLENMİYORDU (bootstrap onu çekmez; yalnız kurulum, göç ve panel
+ * araçları çeker). Sonuç: 43 ayrı çağrı `function_exists()` ile korunuyordu ve
+ * koruma tuttuğunda kod SESSİZCE YANLIŞ DALA düşüyordu — hiçbir hata vermeden.
+ *
+ * Somut sonuçlar: `trash_filter_sql()` çöp kutusu süzgecini hiç eklemiyordu
+ * (silinmiş haberler panel sayımlarına giriyordu) ve yorum silme yanıtları
+ * arkada bırakıyordu. Bir ajan da çıplak CLI'da ölümcül hata aldı.
+ *
+ * İkisi de yalnız db_driver()/qa()/q1()/qv() kullanır; bootstrap'ta olmaları
+ * yeni bir bağımlılık getirmez.
+ */
+
+/** Bir tabloda sütun var mı? */
+function schema_has_column($table, $column) {
+    try {
+        if (db_driver() === 'sqlite') {
+            foreach (qa('PRAGMA table_info(' . preg_replace('/[^a-z0-9_]/i', '', $table) . ')') as $c) {
+                if (strcasecmp($c['name'], $column) === 0) { return true; }
+            }
+            return false;
+        }
+        $r = q1('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c',
+            [':t' => $table, ':c' => $column]);
+        return (bool)$r;
+    } catch (Throwable $e) { return false; }
+}
+
+/** Bir tablo var mı? */
+function schema_has_table($table) {
+    try {
+        if (db_driver() === 'sqlite') {
+            return (bool)qv('SELECT name FROM sqlite_master WHERE type = \'table\' AND name = :t', [':t' => $table]);
+        }
+        return (bool)qv('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t', [':t' => $table]);
+    } catch (Throwable $e) { return false; }
+}
+
+/**
  * Çöp kutusunu eleyen SQL parçası: " AND p.deleted_at = ''" ya da ''.
  *
  * Panel sayaçları `published_where()` kullanmaz (yayımlanmamışları da sayarlar),
@@ -736,7 +778,16 @@ function cron_registered_tasks() {
  * AYNI listeyi okur. Yeni modül eklerken tek yer değişir.
  */
 function manset_feature_modules() {
-    return ['analytics', 'ads', 'payment', 'paywall', 'newsletter'];
+    return [
+        // 1.2 "Yayıncı paketi"
+        'analytics', 'ads', 'payment', 'paywall', 'newsletter',
+        // 1.3 "Haber odası"
+        'search',      // tam metin arama (FTS5 / FULLTEXT), search_posts() devreder
+        'discover',    // yazar sayfası, tarih arşivi, etiket bulutu
+        'revisions',   // sürüm geçmişi, otomatik kayıt, düzenleme kilidi
+        'comments',    // yorum yanıtları, kara liste, moderasyon
+        'embed',       // oEmbed gömme (YouTube/Vimeo/X/Instagram)
+    ];
 }
 
 /** Özellik modüllerini yükler (dosya yoksa sessizce atlanır). */

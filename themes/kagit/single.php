@@ -65,8 +65,16 @@ $yol[] = ['label' => (string)$post['title'], 'url' => url_post($post)];
       <hr class="cizgi-ince">
 
       <div class="haber-meta">
+        <?php /* 1.3-10: yazar adı, yazarın diğer haberlerine bağlanır.
+           discover_author_url() üye/pasif/personel olmayan hesapta ve yayında
+           haberi olmayan hesapta '' döner; o zaman eski düz metin basılır. */ ?>
         <?php if (!empty($post['author_name'])): ?>
-          <span class="yazar" itemprop="author"><?= esc($post['author_name']) ?></span>
+          <?php $yazarUrl = function_exists('discover_author_url') ? discover_author_url($post) : ''; ?>
+          <?php if ($yazarUrl !== ''): ?>
+            <a class="yazar" itemprop="author" href="<?= esc($yazarUrl) ?>"><?= esc($post['author_name']) ?></a>
+          <?php else: ?>
+            <span class="yazar" itemprop="author"><?= esc($post['author_name']) ?></span>
+          <?php endif; ?>
         <?php endif; ?>
 
         <?php /* BİK m.4 — ilk yayım tarihi */ ?>
@@ -152,6 +160,10 @@ $yol[] = ['label' => (string)$post['title'], 'url' => url_post($post)];
         </form>
       </details>
     <?php endif; ?>
+    <?php /* 1.3-10: ilgili haberler artık ETİKET KESİŞİMİYLE puanlanır
+       (ortak etiket çoksa daha ilgili), yeterli aday yoksa kategoriye düşer.
+       Modül kurulu değilse index.php'nin verdiği kategori listesi kalır. */ ?>
+    <?php if (function_exists('discover_related_posts')) { $related = discover_related_posts($post, 4); } ?>
 
     <?php $ilgili = isset($related) && $related ? $related : related_posts($post, 4); ?>
     <?php if ($ilgili): ?>
@@ -163,6 +175,9 @@ $yol[] = ['label' => (string)$post['title'], 'url' => url_post($post)];
         </div>
       </section>
     <?php endif; ?>
+
+    <?php /* 1.3-10: önceki / sonraki haber. */ ?>
+    <?php part('haber-gezinme', ['post' => $post]); ?>
 
     <?php part('comments', ['post' => $post, 'comments' => isset($comments) ? $comments : []]); ?>
   </article>

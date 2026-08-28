@@ -26,6 +26,13 @@
  * 4. Disk dolu / klasör yazılamaz durumunda önbellek sessizce devre dışı kalır;
  *    site çalışmaya devam eder, hata saatte bir kez log_error() ile bildirilir.
  *
+ * 5. KAPSAM İNDEKSİ (1.3-12). Bir sayfa yalnız bulunduğu YOLUN kapsamına değil,
+ *    İÇİNDE GEÇEN her habere/kategoriye de aittir. Anasayfa 12 haber listeliyorsa
+ *    o 12 haberin her biri anasayfayı "kirletebilir". Bu ilişki diskte tutulur:
+ *      uploads/cache/_idx/<ab>/<sha1(etiket)>.idx  →  satır satır önbellek anahtarı
+ *    Böylece `cache_flush('post:12')` bütün önbelleği değil, YALNIZ 12 numaralı
+ *    haberin geçtiği sayfaları düşürür. Ayrıntı: cache_store_tags() başlığı.
+ *
  * GÜVENLİK — oturum sızıntısı kapıları (cache_end içinde):
  *    · HTTP durumu 200 değilse yazılmaz (404/410/301 önbelleğe girmez).
  *    · Çıktıda dolu bir CSRF anahtarı varsa yazılmaz (kişiye özel değer sızmasın).
@@ -48,6 +55,14 @@ function cache_root() { return CACHE_DIR; }
 
 /** Üstveri satırının ön eki. */
 function cache_meta_prefix() { return '<!--MANSET-CACHE '; }
+
+/**
+ * Üstveri satırı için okuma tavanı.
+ * 1.3'te satıra kapsam etiketleri de girdi; 2 KB'lik eski tavan kalabalık bir
+ * anasayfada satırı ORTADAN KESERDİ ve dosya "bozuk" sayılıp her istekte yeniden
+ * üretilirdi (sessiz bir önbellek kaybı). Yazma tarafı da aynı tavana uyar.
+ */
+function cache_meta_max_bytes() { return 16384; }
 
 /**
  * Kök klasörü ve koruma dosyalarını bir kez hazırlar.
@@ -166,7 +181,28 @@ function cache_scope_for($path) {
     }
     if ($head === 'kategori') { return 'category'; }
     if ($head === 'etiket')   { return 'tag'; }
-    if ($head === 'arama')    { return 'search'; }
+    // KEŞİF SAYFALARI (1.3-10): yazar, tarih arşivi ve etiket bulutu.
+    // Bunlar da tamamen genel, oturumsuz LİSTE sayfalarıdır; `other` kapsamına
+    // düşüp TTL 0 aldıkları için hiç önbelleğe alınmıyorlardı (Ajan-E ölçtü).
+    // `tag` ile aynı ömrü paylaşırlar ve `cache_list_scopes()` içinde olduğu
+    // için bir haber değiştiğinde onlarla birlikte düşerler.
+    if ($head === 'yazar' || $head === 'arsiv' || $head === 'etiketler') { return 'tag'; }
+    // ARAMA SONUCU ÖNBELLEĞE ALINMAZ (denetim turu 5, D2-03).
+    //
+    // Her farklı `?q=` ayrı bir önbellek dosyası üretiyordu ve arama yolunda hız
+    // sınırı yok. Denetçi ölçtü: 60 anonim istek → 61 dosya / 1,5 MB. Bu tek
+    // başına zararsız görünür, ama `cache_sweep()` boyut tavanına gelince EN
+    // ESKİYİ atar — yani gerçek trafiğin ısıttığı anasayfa ve haber sayfaları,
+    // bir saldırganın ürettiği anlamsız arama sayfaları tarafından tahliye edilir.
+    // Önbelleğin zarar verdiği tek yer burasıdır.
+    //
+    // Terimsiz `/arama` (boş form sayfası) sabittir ve önbelleğe alınabilir.
+    // `cache_list_scopes()` içinde 'search' KALIR: eski önbellek girdileri ve
+    // hedefli temizlik çağrıları çalışmaya devam etsin.
+    if ($head === 'arama') {
+        $q = isset($_GET['q']) ? trim((string)$_GET['q']) : '';
+        return $q === '' ? 'search' : 'other';   // 'other' → TTL 0 → yazılmaz
+    }
     if ($head === 'sayfa' || $head === 'kunye') { return 'page'; }
     return 'other';
 }
@@ -184,6 +220,316 @@ function cache_ttl_for($scope) {
         return max(0, min(3600, (int)setting('cache_ttl_home', '60')));
     }
     return 0;
+}
+
+// ==================================================== kapsam etiketleri (1.3-12)
+
+/**
+ * KAPSAM ETİKETİ NEDİR
+ * --------------------
+ * `scope` bir sayfanın TÜRÜdür ('home', 'category', 'post:12'). Etiket ise
+ * sayfanın İÇERİĞİYLE kurduğu bağdır: anasayfa `home` etiketini taşır ama aynı
+ * zamanda listelediği her haberin (`post:12`) ve her kategorinin (`cat:gundem`)
+ * etiketini de taşır.
+ *
+ * Etiket sözlüğü:
+ *   home            anasayfa
+ *   post:<id>       bu haberin metni ya da bağlantısı sayfada geçiyor
+ *   cat:<slug>      bu kategori sayfada geçiyor (kategori sayfasının kendisi dâhil)
+ *   tag:<slug>      bu etiket sayfada geçiyor
+ *   scope:<tür>     sayfanın kendi türü — eski `cache_flush('category')` çağrıları
+ *                   bu etiketle karşılanır (geriye dönük uyum)
+ */
+function cache_tag_clean($tag) {
+    $tag = strtolower(trim((string)$tag));
+    if ($tag === '') { return ''; }
+    // Etiket bir dosya adına çevrilmeden önce sha1'lenir; yine de kontrolsüz
+    // uzunluk ve boşluk kabul edilmez.
+    if (strlen($tag) > 120) { $tag = substr($tag, 0, 120); }
+    if (!preg_match('/^[a-z0-9:_\-\.%]+$/', $tag)) { return ''; }
+    return $tag;
+}
+
+/** Yoldan doğan etiketler (sayfanın KENDİ kimliği). */
+function cache_path_tags($path) {
+    $path = trim(preg_replace('#/+#', '/', (string)$path), '/');
+    $scope = cache_scope_for($path);
+    $tags = ['scope:' . $scope];
+    if ($scope === 'home') { $tags[] = 'home'; }
+    if (strpos($scope, 'post:') === 0) { $tags[] = $scope; }
+    $seg = explode('/', $path);
+    if (isset($seg[0]) && isset($seg[1]) && $seg[1] !== '') {
+        if ($seg[0] === 'kategori') { $tags[] = 'cat:' . $seg[1]; }
+        if ($seg[0] === 'etiket')   { $tags[] = 'tag:' . $seg[1]; }
+    }
+    $out = [];
+    foreach ($tags as $t) { $t = cache_tag_clean($t); if ($t !== '' && !in_array($t, $out, true)) { $out[] = $t; } }
+    return $out;
+}
+
+/** Bir sayfanın taşıyabileceği en çok etiket sayısı (indeks yazımını sınırlar). */
+function cache_max_tags() { return 300; }
+
+/**
+ * ÇIKTIDAN ETİKET ÇIKARMA — neden HTML taranıyor?
+ *
+ * Hangi haberin hangi sayfada göründüğünü en iyi bilen yer, o sayfayı üreten
+ * koddur; ama tema ve `inc/view.php` bu ajanın dosyası DEĞİL ve her tema kendi
+ * biçimini kuruyor. Bunun yerine üretilmiş HTML taranır: bir haber bir sayfada
+ * görünüyorsa o sayfada ona giden bir bağlantı (`/haber/<slug>-<id>`) de vardır —
+ * başlık, "devamı", görsel bağlantısı, JSON-LD, RSS bağlantısı… En az biri.
+ *
+ * DOĞRULUK YÖNÜ: tarama GENİŞ tutuldu. Yanlış pozitif (ilgisiz sayfayı da
+ * düşürmek) yalnız bir MISS'e mal olur; yanlış negatif ise okura ESKİ HABER
+ * gösterir. Bu yüzden `haber/…-12` kalıbı yol, sorgu dizesi (`?r=haber/…`),
+ * kanonik etiket, JSON-LD, hepsinde aynı biçimde geçtiği için tek bir metin
+ * araması bütün biçimleri yakalar.
+ *
+ * YAKALANMAYAN DURUM (bilerek): bir tema haberin metnini basıp ona HİÇ bağlantı
+ * vermezse o sayfa `post:<id>` etiketi almaz. Bu yüzden yeni haber yayımlama /
+ * silme gibi LİSTEYİ değiştiren işlemler `['post:<id>', 'home', 'cat:<slug>']`
+ * gibi çoklu kapsamla düşürülmelidir (raporda çağrı listesi var).
+ */
+function cache_html_tags($html) {
+    $html = (string)$html;
+    $tags = [];
+    $ekle = function ($t) use (&$tags) {
+        $t = cache_tag_clean($t);
+        if ($t !== '' && !isset($tags[$t]) && count($tags) < cache_max_tags()) { $tags[$t] = true; }
+    };
+    if (preg_match_all('#haber/[^\s"\'<>]*?-(\d+)(?![0-9])#', $html, $m)) {
+        foreach ($m[1] as $id) { $id = (int)$id; if ($id > 0) { $ekle('post:' . $id); } }
+    }
+    /*
+     * KATEGORİ VE ETİKET, ÇIKTIDAN ÇIKARILMAZ — ÖLÇÜMLE ALINMIŞ KARAR.
+     * İlk uygulamada `/kategori/<slug>` bağlantıları da etikete çevriliyordu.
+     * Sonuç: menü her sayfada bütün kategorileri listelediği için her sayfa her
+     * kategorinin etiketini taşıdı ve `cache_flush('cat:spor')` önbelleğin
+     * TAMAMINI düşürdü (ölçüm: 5 sayfanın 5'i). Yani kapsam vardı ama boştu.
+     *
+     * Kategori/etiket etiketi artık YALNIZ sayfanın kendi yolundan gelir
+     * (cache_path_tags): 'cat:spor' = /kategori/spor sayfasının kendisi.
+     * Kayıp yok, çünkü "kategori listesi değişti" durumunun iki hâli de zaten
+     * karşılanıyor: haber DEĞİŞTİYSE liste sayfası o haberin `post:<id>`
+     * etiketini taşır; haber YENİYSE hiçbir sayfa onu tanımaz ve zaten geniş
+     * düşülmesi gerekir (cache_flush('category')).
+     */
+    return array_keys($tags);
+}
+
+/** Kapsam indeksi kök klasörü. Sayfa dosyalarının iki seviyeli ağacının DIŞINDA. */
+function cache_index_dir() { return cache_root() . '/_idx'; }
+
+/**
+ * İndeks klasörünü hazırlar.
+ *
+ * KLASÖR YOKSA MEVCUT ÖNBELLEK BİR KEZ SİLİNİR. Neden: indeks yokken yazılmış
+ * sayfaların hangi habere ait olduğu bilinmez; onlar diskte kalırsa hedefli bir
+ * temizlik onları ATLAR ve okur eski haber görür. Önbellek yeniden üretilebilir
+ * bir veridir; bir kerelik boşaltmanın bedeli birkaç MISS'tir.
+ */
+function cache_index_ensure() {
+    static $ready = null;
+    if ($ready !== null) { return $ready; }
+    $dir = cache_index_dir();
+    if (is_dir($dir)) { return $ready = true; }
+    if (!cache_ensure_root()) { return $ready = false; }
+    $vardi = count(cache_files()) > 0;
+    if (!ensure_dir($dir)) { return $ready = false; }
+    if ($vardi) {
+        foreach (cache_files() as $f) { @unlink($f); }
+        cache_prune_empty_dirs();
+    }
+    return $ready = true;
+}
+
+/** Etiketin indeks dosyası. */
+function cache_index_file($tag) {
+    $tag = cache_tag_clean($tag);
+    if ($tag === '') { return ''; }
+    $h = sha1($tag);
+    return cache_index_dir() . '/' . substr($h, 0, 2) . '/' . $h . '.idx';
+}
+
+/**
+ * Anahtarı etiketin indeksine ekler.
+ *
+ * EŞZAMANLILIK: dosya 'ab' (append) kipinde açılır ve LOCK_EX ile kilitlenir;
+ * her satır sabit uzunlukta (40 onaltılık hane + \n). Kilit alınamazsa satır
+ * yine de yazılır — POSIX'te O_APPEND yazımı zaten atomiktir; kilit Windows
+ * tarafı için ek güvencedir. Yarım satır oluşmaz, dolayısıyla eşzamanlı yazma
+ * indeksi bozamaz. (Ölçüm: tests/unit/cache.test.php + paralel süreç turu.)
+ */
+function cache_index_add($tag, $key) {
+    $file = cache_index_file($tag);
+    if ($file === '') { return false; }
+    $key = preg_replace('/[^a-f0-9]/', '', strtolower((string)$key));
+    if (strlen($key) !== 40) { return false; }
+    if (!ensure_dir(dirname($file))) { return false; }
+    $fh = @fopen($file, 'ab');
+    if (!$fh) { return false; }
+    @flock($fh, LOCK_EX);
+    $ok = @fwrite($fh, $key . "\n");
+    @fflush($fh);
+    @flock($fh, LOCK_UN);
+    fclose($fh);
+    return $ok !== false;
+}
+
+/** Etiketin indeksindeki anahtarlar (tekrarsız). İndeks dosyası yoksa null. */
+function cache_index_read($tag) {
+    $file = cache_index_file($tag);
+    if ($file === '' || !is_file($file)) { return null; }
+    $fh = @fopen($file, 'rb');
+    if (!$fh) { return null; }
+    @flock($fh, LOCK_SH);
+    $keys = [];
+    while (($line = fgets($fh, 64)) !== false) {
+        $line = trim($line);
+        if ($line === '' || $line[0] === '#') { continue; }
+        if (strlen($line) === 40 && ctype_xdigit($line)) { $keys[$line] = true; }
+    }
+    @flock($fh, LOCK_UN);
+    fclose($fh);
+    return array_keys($keys);
+}
+
+/**
+ * Etiketin indeksini boşaltır — dosya SİLİNMEZ, sıfırlanır.
+ * Dosyanın var olması "bu etiket indeksleniyor" demektir; silinseydi bir sonraki
+ * temizlik indeksi eksik sanıp tüm önbelleği taramak zorunda kalırdı.
+ */
+function cache_index_clear($tag) {
+    $file = cache_index_file($tag);
+    if ($file === '' || !is_file($file)) { return; }
+    $fh = @fopen($file, 'r+b');
+    if (!$fh) { return; }
+    @flock($fh, LOCK_EX);
+    @ftruncate($fh, 0);
+    @flock($fh, LOCK_UN);
+    fclose($fh);
+}
+
+/** İndekste kayıtlı (dolu) etiket sayısı — panel/durum ekranı için. */
+function cache_index_count() {
+    $dir = cache_index_dir();
+    if (!is_dir($dir)) { return 0; }
+    $n = 0;
+    foreach ((array)glob($dir . '/*', GLOB_ONLYDIR) as $d) {
+        foreach ((array)glob($d . '/*.idx') as $f) { if ((int)@filesize($f) > 0) { $n++; } }
+    }
+    return $n;
+}
+
+/** Tüm indeksi siler (tam temizlikte). */
+function cache_index_drop_all() {
+    $dir = cache_index_dir();
+    if (!is_dir($dir)) { return; }
+    foreach ((array)glob($dir . '/*', GLOB_ONLYDIR) as $d) {
+        foreach ((array)glob($d . '/*.idx') as $f) { @unlink($f); }
+        @rmdir($d);
+    }
+}
+
+/**
+ * İndeksi budar: artık diskte olmayan anahtarların satırlarını atar.
+ * Süresi dolan sayfalar cache_sweep() ile silinir ama indekste adları kalır;
+ * budanmazsa indeks dosyası sonsuza kadar büyür. Yeniden yazım geçici dosya +
+ * rename ile atomiktir, bu sırada gelen bir ekleme en kötü ihtimalle kaybolur —
+ * kaybolan satır yalnız o sayfanın hedefli temizlikte atlanması demek olurdu,
+ * bu yüzden budama YALNIZ cron süpürmesinde (cache_sweep) yapılır ve budamadan
+ * sonra temizlik damgası atılır (o an üretilmekte olan sayfalar yazılmaz).
+ *
+ * @return int budanan satır sayısı
+ */
+function cache_index_compact() {
+    $dir = cache_index_dir();
+    if (!is_dir($dir)) { return 0; }
+    $atilan = 0;
+    foreach ((array)glob($dir . '/*', GLOB_ONLYDIR) as $d) {
+        foreach ((array)glob($d . '/*.idx') as $f) {
+            $fh = @fopen($f, 'r+b');
+            if (!$fh) { continue; }
+            @flock($fh, LOCK_EX);
+            $kalan = [];
+            $vardi = 0;
+            while (($line = fgets($fh, 64)) !== false) {
+                $line = trim($line);
+                if ($line === '' || $line[0] === '#') { continue; }
+                $vardi++;
+                if (isset($kalan[$line])) { continue; }
+                $pf = cache_file($line);
+                if ($pf !== '' && is_file($pf)) { $kalan[$line] = true; }
+            }
+            if (count($kalan) < $vardi) {
+                $atilan += $vardi - count($kalan);
+                @ftruncate($fh, 0);
+                @rewind($fh);
+                if ($kalan) { @fwrite($fh, implode("\n", array_keys($kalan)) . "\n"); }
+            }
+            @flock($fh, LOCK_UN);
+            fclose($fh);
+        }
+    }
+    if ($atilan > 0) { cache_flush_marker_touch(); }
+    return $atilan;
+}
+
+/** Son temizlik damgası dosyası (yarış kalkanı — cache_store başlığına bakın). */
+function cache_flush_marker_file() { return cache_index_dir() . '/.flushed'; }
+
+/**
+ * Son temizliğin zamanı (float epoch). Damga yoksa 0.0.
+ *
+ * MİKROSANİYE ÇÖZÜNÜRLÜK ZORUNLU. Damga eskiden `filemtime()` ile okunuyordu ve
+ * o SANİYE çözünürlüklüdür; `cache_store()` karşılaştırması ise `>=`. Sonuç:
+ * temizlikle AYNI SANİYE içinde başlayan — yani temizlikten hemen SONRAKİ —
+ * istek, sayfayı önbelleğe hiç yazmıyordu.
+ *
+ * Bu, e2e'de "anasayfa ikinci istek HIT beklendi" olarak göründü ama asıl etkisi
+ * çok daha genişti: canlı bir sitede her içerik yazımı bir temizlik tetikler,
+ * dolayısıyla o saniye içinde üretilen HER sayfa boşa üretiliyordu. 1.3-12'nin
+ * amacı tam da önbelleği daha çok kullanmaktı.
+ *
+ * Zaman dosyanın İÇİNE yazılır; `filemtime` yalnız eski damgalar için yedektir.
+ */
+function cache_flush_marker_time() {
+    $f = cache_flush_marker_file();
+    clearstatcache(true, $f);
+    if (!is_file($f)) { return 0.0; }
+    $ham = trim((string)@file_get_contents($f));
+    if ($ham !== '' && is_numeric($ham)) { return (float)$ham; }
+    $t = (int)@filemtime($f);
+    return $t > 0 ? (float)$t : 0.0;
+}
+
+/** Temizlik damgasını 'şimdi'ye çeker (mikrosaniye duyarlı). */
+function cache_flush_marker_touch() {
+    $f = cache_flush_marker_file();
+    if (!ensure_dir(dirname($f))) { return; }
+    // Dosyanın İÇERİĞİ otoritedir; touch() yalnız mtime'ı da güncel tutmak için.
+    @file_put_contents($f, sprintf('%.6F', microtime(true)), LOCK_EX);
+    clearstatcache(true, $f);
+}
+
+/**
+ * Kapsam adını hedef etiket listesine çevirir.
+ * null dönerse "hepsini sil" demektir (bilinmeyen kapsamda güvenli taraf).
+ */
+function cache_scope_targets($scope) {
+    $scope = cache_tag_clean($scope);
+    if ($scope === '') { return null; }
+    if (strpos($scope, 'post:') === 0 && (int)substr($scope, 5) > 0) { return [$scope]; }
+    if (strpos($scope, 'cat:') === 0 && strlen($scope) > 4)          { return [$scope]; }
+    if (strpos($scope, 'tag:') === 0 && strlen($scope) > 4)          { return [$scope]; }
+    if ($scope === 'home')  { return ['home']; }
+    if ($scope === 'page')  { return ['scope:page']; }
+    // 1.2 adları: tek bir liste türü verilse de bütün liste sayfaları düşer —
+    // eski çağrıların anlamı buydu, korunuyor.
+    if (in_array($scope, cache_list_scopes(), true)) {
+        return ['home', 'scope:category', 'scope:tag', 'scope:search'];
+    }
+    return null;
 }
 
 /**
@@ -213,8 +559,10 @@ function cache_key_for($path, $get) {
     ];
     $key = sha1(implode("\n", $parts));
 
-    // Kapsamı cache_begin() için sakla (routeHead haber kimliğini taşımıyor).
+    // Kapsamı ve YOLU cache_begin() için sakla (routeHead haber kimliğini de,
+    // kategori kısa adını da taşımıyor; kapsam indeksi ikisine de muhtaç).
     $GLOBALS['manset_cache_scope'] = $scope;
+    $GLOBALS['manset_cache_path'] = $path;
     return $key;
 }
 
@@ -242,6 +590,10 @@ function cache_parse_meta($line) {
     $m['scope'] = isset($m['scope']) ? (string)$m['scope'] : 'other';
     $m['ms']    = isset($m['ms']) ? (int)$m['ms'] : 0;
     $m['ct']    = isset($m['ct']) ? (string)$m['ct'] : 'text/html; charset=utf-8';
+    // 'sc' = kapsam etiketleri (1.3-12). Alan YOKSA null bırakılır: "bilinmiyor"
+    // ile "etiketi yok" ayrı şeylerdir — bilinmeyen dosya hedefli temizlikte
+    // güvenli tarafa düşer (silinir).
+    $m['sc'] = (isset($m['sc']) && is_array($m['sc'])) ? array_values(array_filter(array_map('strval', $m['sc']))) : null;
     return $m;
 }
 
@@ -249,7 +601,7 @@ function cache_parse_meta($line) {
 function cache_read_meta_file($file) {
     $fh = @fopen($file, 'rb');
     if (!$fh) { return null; }
-    $line = fgets($fh, 2048);
+    $line = fgets($fh, cache_meta_max_bytes());
     fclose($fh);
     return cache_parse_meta($line);
 }
@@ -287,7 +639,7 @@ function cache_serve($key) {
 
     $fh = @fopen($file, 'rb');
     if (!$fh) { return false; }
-    $meta = cache_parse_meta(fgets($fh, 2048));
+    $meta = cache_parse_meta(fgets($fh, cache_meta_max_bytes()));
     if (!$meta || $meta['exp'] <= time()) { fclose($fh); return false; }
 
     $offset = (int)ftell($fh);
@@ -358,10 +710,13 @@ function cache_begin($key, $routeHead) {
 
     if (!headers_sent()) { header('X-Manset-Cache: MISS'); }
 
+    $path = isset($GLOBALS['manset_cache_path']) ? (string)$GLOBALS['manset_cache_path'] : (string)$routeHead;
+
     $GLOBALS['manset_cache_ctx'] = [
         'key'    => $key,
         'file'   => $file,
         'scope'  => $scope,
+        'path'   => $path,
         'ttl'    => $ttl,
         'start'  => microtime(true),
         'level'  => ob_get_level(),
@@ -407,24 +762,70 @@ function cache_response_sets_cookie() {
     return false;
 }
 
-/** Üretilen sayfayı diske yazar (geçici dosya + rename ile atomik). */
+/**
+ * Sayfanın etiketlerini hesaplar: yolun kimliği + çıktıda geçen haber/kategori.
+ * (Ayrı işlev, çünkü birim testte HTML verip doğrulanabilmesi gerekiyor.)
+ */
+function cache_store_tags(array $ctx, $html) {
+    $tags = cache_path_tags(isset($ctx['path']) ? (string)$ctx['path'] : '');
+    foreach (cache_html_tags($html) as $t) {
+        if (!in_array($t, $tags, true)) { $tags[] = $t; }
+        if (count($tags) >= cache_max_tags()) { break; }
+    }
+    return $tags;
+}
+
+/**
+ * Üretilen sayfayı diske yazar (geçici dosya + rename ile atomik).
+ *
+ * YARIŞ KALKANI. Bir sayfa üretilirken araya bir temizlik girerse, üretim
+ * temizlikten ÖNCEKİ veriyle başlamış olabilir; onu temizlikten sonra diske
+ * yazmak okura eski haberi TTL boyunca göstermek demektir. Bu yüzden yazımdan
+ * hemen önce son temizlik damgasına bakılır: damga bu isteğin başlangıcından
+ * yeni ya da aynı saniyedeyse sayfa YAZILMAZ (bedeli tek bir MISS).
+ * Yerleşik sunucu istekleri sıraya soktuğu için bu yarış HTTP üzerinden
+ * ölçülemez; paralel PHP süreçleriyle ölçüldü (1.3 sözleşmesi §1.3).
+ */
 function cache_store(array $ctx, $html) {
     $file = (string)$ctx['file'];
     $dir = dirname($file);
     if (!ensure_dir($dir)) { cache_report_write_error('klasör oluşturulamadı: ' . $dir); return false; }
+    cache_index_ensure();
+
+    // Araya temizlik girdiyse bu üretim BAYATTIR ve yazılmamalıdır.
+    // Karşılaştırma float: saniyeye yuvarlamak, temizlikten hemen sonraki
+    // isteği de yanlışlıkla eleyordu (yukarıdaki açıklama).
+    $basladi = (float)$ctx['start'];
+    if (cache_flush_marker_time() >= $basladi) { return false; }
+
+    // Etiketler ÖNCE indekse yazılır, sayfa SONRA yerine oturur. Ters sırada
+    // yazılsaydı, indekse girmemiş bir sayfa hedefli temizlikte atlanabilirdi.
+    $tags = cache_store_tags($ctx, $html);
+    foreach ($tags as $t) { cache_index_add($t, (string)$ctx['key']); }
 
     $now = time();
     $meta = [
-        'v'     => 1,
+        'v'     => 2,
         't'     => $now,
         'exp'   => $now + (int)$ctx['ttl'],
         'scope' => (string)$ctx['scope'],
+        'sc'    => $tags,
         'ms'    => (int)round((microtime(true) - (float)$ctx['start']) * 1000),
         'ct'    => 'text/html; charset=utf-8',
     ];
     $line = cache_meta_prefix()
           . json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
           . "-->\n";
+    if (strlen($line) > cache_meta_max_bytes() - 64) {
+        // Etiket listesi satıra sığmadı. Satırı KESMEK yerine listeyi tümden
+        // düşürürüz: yarım liste "bu haber burada yok" yalanını söyler ve okura
+        // eski haber gösterir. Listesiz dosya ise hedefli temizlikte "bilinmiyor"
+        // sayılıp silinir — geniş düşmek, eksik düşmekten iyidir.
+        unset($meta['sc']);
+        $line = cache_meta_prefix()
+              . json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+              . "-->\n";
+    }
 
     $tmp = $file . '.' . bin2hex(random_bytes(4)) . '.tmp';
     $bytes = @file_put_contents($tmp, $line . $html);
@@ -481,6 +882,8 @@ function cache_files() {
     $root = cache_root();
     if (!is_dir($root)) { return $out; }
     foreach ((array)glob($root . '/*', GLOB_ONLYDIR) as $d1) {
+        // '_' ile başlayan klasörler yönetim içindir (_idx), sayfa taşımaz.
+        if (strncmp(basename($d1), '_', 1) === 0) { continue; }
         foreach ((array)glob($d1 . '/*', GLOB_ONLYDIR) as $d2) {
             foreach ((array)glob($d2 . '/*.html') as $f) { $out[] = $f; }
         }
@@ -494,6 +897,9 @@ function cache_prune_empty_dirs() {
     if (!is_dir($root)) { return 0; }
     $n = 0;
     foreach ((array)glob($root . '/*', GLOB_ONLYDIR) as $d1) {
+        // _idx TOPLANMAZ: silinseydi bir sonraki istek "indeks yok" sanıp
+        // önbelleğin tamamını boşaltırdı (cache_index_ensure).
+        if (strncmp(basename($d1), '_', 1) === 0) { continue; }
         foreach ((array)glob($d1 . '/*', GLOB_ONLYDIR) as $d2) {
             $items = @scandir($d2);
             if (is_array($items) && count($items) <= 2 && @rmdir($d2)) { $n++; }
@@ -506,46 +912,91 @@ function cache_prune_empty_dirs() {
 
 // ============================================================ temizleme
 
+/** Anahtar listesini siler; silinen dosya sayısını döndürür. */
+function cache_delete_keys(array $keys) {
+    $n = 0;
+    foreach ($keys as $k) {
+        $f = cache_file($k);
+        if ($f !== '' && is_file($f) && @unlink($f)) { $n++; }
+    }
+    return $n;
+}
+
+/**
+ * İndeks olmadan, üstveriyi okuyarak etiket eşleşen dosyaları siler.
+ * Yalnız etiketin indeks dosyası HİÇ yoksa (ya da üstverisi etiketsiz dosyalar
+ * varsa) çalışır. Üstverisi okunamayan ya da etiket listesi olmayan dosya
+ * "bilinmiyor" sayılır ve SİLİNİR — eksik düşmektense geniş düşmek.
+ */
+function cache_purge_scan(array $tags) {
+    $n = 0;
+    foreach (cache_files() as $f) {
+        $m = cache_read_meta_file($f);
+        if ($m === null || $m['sc'] === null) { if (@unlink($f)) { $n++; } continue; }
+        foreach ($tags as $t) {
+            if (in_array($t, $m['sc'], true)) { if (@unlink($f)) { $n++; } break; }
+        }
+    }
+    return $n;
+}
+
 /**
  * Verilen kapsamı siler ve silinen dosya sayısını döndürür.
  * cache_flush() bunun void sarmalayıcısıdır (sözleşme imzası).
+ *
+ * @param string|array|null $scope null → HEPSİ (1.2 davranışı, aynen korunur)
+ *                                 'post:12' | 'cat:gundem' | 'tag:deprem' | 'home' | 'page'
+ *                                 dizi → birden çok kapsam tek turda
  */
 function cache_purge($scope = null) {
     $root = cache_root();
     if (!is_dir($root)) { return 0; }
 
-    $scope = ($scope === null || $scope === '') ? null : (string)$scope;
-    $targets = null; // null = hepsi
-    if ($scope !== null) {
-        $lists = cache_list_scopes();
-        if (strpos($scope, 'post:') === 0) {
-            // Haber sayfası + haber listelerde göründüğü için tüm liste sayfaları
-            $targets = array_merge([$scope], $lists);
-        } elseif (in_array($scope, $lists, true)) {
-            $targets = $lists;
-        } elseif ($scope === 'page') {
-            $targets = ['page'];
-        } else {
-            $targets = null; // bilinmeyen kapsam → güvenli taraf: hepsini düşür
-        }
+    // --- kapsam listesini normalleştir
+    $scopes = is_array($scope) ? $scope : (($scope === null || $scope === '') ? [] : [$scope]);
+    $targets = [];
+    $hepsi = ($scopes === []);
+    foreach ($scopes as $s) {
+        $t = cache_scope_targets($s);
+        if ($t === null) { $hepsi = true; break; }   // bilinmeyen kapsam → güvenli taraf
+        foreach ($t as $tag) { if (!in_array($tag, $targets, true)) { $targets[] = $tag; } }
+    }
+
+    // Damga ÖNCE atılır: bu an ile silme arasında biten bir üretim, kendi
+    // başlangıcını damgadan eski görüp diske yazmaktan vazgeçer.
+    cache_flush_marker_touch();
+
+    if ($hepsi) {
+        $n = 0;
+        foreach (cache_files() as $f) { if (@unlink($f)) { $n++; } }
+        cache_index_drop_all();
+        cache_prune_empty_dirs();
+        return $n;
     }
 
     $n = 0;
-    foreach (cache_files() as $f) {
-        if ($targets === null) { if (@unlink($f)) { $n++; } continue; }
-        $m = cache_read_meta_file($f);
-        if ($m === null || in_array((string)$m['scope'], $targets, true)) {
-            // Üstverisi okunamayan dosya bozuktur; o da gitsin.
-            if (@unlink($f)) { $n++; }
+    $scanTags = [];
+    foreach ($targets as $tag) {
+        $keys = cache_index_read($tag);
+        if ($keys === null) {
+            // İndeks dosyası yok: bu etiket hiç yazılmamış olabilir de, indeks
+            // kaybolmuş da olabilir. Ayırt edemeyiz → tarayarak temizleriz.
+            $scanTags[] = $tag;
+            continue;
         }
+        $n += cache_delete_keys($keys);
+        cache_index_clear($tag);
     }
+    if ($scanTags) { $n += cache_purge_scan($scanTags); }
     if ($n > 0) { cache_prune_empty_dirs(); }
     return $n;
 }
 
 /**
  * Önbelleği temizler (CONTRACTS §11 imzası — dönüş değeri yoktur).
- * @param string|null $scope 'home' | 'category' | 'post:<id>' | null = hepsi
+ * @param string|array|null $scope 'home' | 'post:<id>' | 'cat:<slug>' | 'tag:<slug>' |
+ *                                 'page' | 1.2 adları ('category','tag','search') |
+ *                                 bunların dizisi | null = hepsi
  */
 function cache_flush($scope = null) {
     try { cache_purge($scope); } catch (Throwable $e) { log_error('cache_flush: ' . $e->getMessage()); }
@@ -589,10 +1040,12 @@ function cache_sweep() {
     }
 
     $dirs = cache_prune_empty_dirs();
+    $budanan = cache_index_compact();
     $kept = count($rows) - $trimmed;
     return $expired . ' süresi geçmiş + ' . $trimmed . ' boyut aşımı dosyası silindi; '
          . max(0, $kept) . ' dosya kaldı (' . cache_human_size($bytes) . '), '
-         . $dirs . ' boş klasör toplandı';
+         . $dirs . ' boş klasör toplandı, '
+         . $budanan . ' ölü kapsam kaydı budandı';
 }
 
 // ============================================================ durum
@@ -622,6 +1075,7 @@ function cache_stats() {
         'size_text' => cache_human_size($bytes),
         'oldest'    => $oldest ? date('Y-m-d H:i:s', $oldest) : '',
         'newest'    => $newest ? date('Y-m-d H:i:s', $newest) : '',
+        'scopes'    => cache_index_count(),
         'ttl_home'  => (int)setting('cache_ttl_home', '60'),
         'ttl_post'  => (int)setting('cache_ttl_post', '300'),
         'max_mb'    => (int)setting('cache_max_mb', '200'),

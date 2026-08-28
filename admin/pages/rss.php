@@ -44,7 +44,10 @@ $poolFilters = [
     'source_id' => inp_i('kaynak', 0),
     'status'    => inp_s('durum', ''),
     'q'         => inp_s('ara', ''),
+    'dup'       => inp_i('tekrar', 0) ? 1 : 0,
 ];
+// Tekrar tespiti sütunları (göç 027) yoksa rozet/süzgeç arayüzü hiç basılmaz.
+$dupVar = function_exists('rss_has_dedupe_columns') ? rss_has_dedupe_columns() : false;
 $poolPage = max(1, inp_i('sayfa', 1));
 $poolPerPage = 25;
 $poolTotal = 0;
@@ -251,8 +254,14 @@ $simdiZaman = now();
   <select name="kaynak" aria-label="Kaynak"><?= admin_options($sourceOptions, $poolFilters['source_id'], 'Tüm kaynaklar') ?></select>
   <select name="durum" aria-label="Durum"><?= admin_options(rss_statuses(), $poolFilters['status'], 'Tüm durumlar') ?></select>
   <input type="search" name="ara" value="<?= esc($poolFilters['q']) ?>" placeholder="Başlıkta ara…">
+  <?php if ($dupVar): ?>
+    <label class="onay-satir" title="Başka bir kaynakta aynısı bulunduğu için işaretlenen ögeler">
+      <input type="checkbox" name="tekrar" value="1" <?= $poolFilters['dup'] ? 'checked' : '' ?>>
+      <span>Yalnız tekrarlar<?= (int)arr($stats, 'tekrar', 0) > 0 ? ' (' . (int)$stats['tekrar'] . ')' : '' ?></span>
+    </label>
+  <?php endif; ?>
   <button type="submit" class="dugme">Süz</button>
-  <?php if ($poolFilters['source_id'] || $poolFilters['status'] !== '' || $poolFilters['q'] !== ''): ?>
+  <?php if ($poolFilters['source_id'] || $poolFilters['status'] !== '' || $poolFilters['q'] !== '' || $poolFilters['dup']): ?>
     <a class="dugme kucuk" href="<?= esc(admin_url('rss', ['sekme' => 'havuz'])) ?>">Temizle</a>
   <?php endif; ?>
   <span class="sag kucuk soluk"><?= (int)$poolTotal ?> öge</span>
@@ -310,8 +319,14 @@ $simdiZaman = now();
           </td>
           <td class="dar"><span class="kucuk"><?= esc($it['source_name'] !== null && $it['source_name'] !== '' ? $it['source_name'] : '—') ?></span></td>
           <td class="dar"><span class="kucuk soluk"><?= esc(tr_date($it['published_at'] ? $it['published_at'] : $it['fetched_at'])) ?></span></td>
-          <td class="dar"><?= admin_badge($stLabel, $tone) ?></td>
+          <td class="dar">
+            <?= admin_badge($stLabel, $tone) ?>
+            <?php if ($dupVar && (int)($it['dup_of'] ?? 0) > 0): ?>
+              <span class="rozet uyari" title="Bu haberin aynısı #<?= (int)$it['dup_of'] ?> numaralı ögede zaten var. Yanlışsa “Taslak yap” ile yine de alabilirsiniz.">tekrar</span>
+            <?php endif; ?>
+          </td>
           <td class="islem">
+            <button type="button" class="dugme kucuk" data-oge-onizle="<?= $iid ?>">Önizle</button>
             <button type="button" class="dugme kucuk" data-oge-eylem="ai_rewrite" data-id="<?= $iid ?>">YZ ile yaz</button>
             <button type="button" class="dugme kucuk" data-oge-eylem="draft" data-id="<?= $iid ?>">Taslak yap</button>
             <button type="button" class="dugme kucuk" data-oge-eylem="skip" data-id="<?= $iid ?>">Atla</button>
@@ -479,6 +494,43 @@ $simdiZaman = now();
       setTimeout(function () { location.reload(); }, r.post_id ? 2600 : 700);
     });
   }
+
+  /* Gövde önizleme: editör içeri almadan önce metnin tamamını görür.
+     Gövde sunucuda sanitize_html() beyaz listesinden geçirilip gönderilir;
+     burada HAM basılır, başlık/kaynak gibi alanlar ise M.esc ile kaçırılır. */
+  M.qsa('[data-oge-onizle]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var id = parseInt(b.getAttribute('data-oge-onizle'), 10);
+      b.disabled = true;
+      M.api('rss.item_preview', { id: id }).then(function (r) {
+        b.disabled = false;
+        if (!r || !r.ok) { M.toast('err', (r && r.error) || 'Önizleme alınamadı.'); return; }
+        var h = '<p class="kucuk soluk">' + M.esc(r.source_name || 'Kaynak')
+              + (r.published_at ? ' · ' + M.esc(r.published_at) : '')
+              + ' · ' + (r.chars || 0) + ' karakter</p>';
+        if (r.dup_of) {
+          h += '<div class="uyari warn mini">Bu öge <strong>tekrar</strong> olarak işaretlendi'
+             + (r.dup_title ? ': “' + M.esc(r.dup_title) + '”' : '')
+             + (r.dup_source ? ' (' + M.esc(r.dup_source) + ')' : '')
+             + '. Yanlışsa “Taslak yap” ile yine de alabilirsiniz.</div>';
+        }
+        if (r.image) {
+          h += '<p><img src="' + M.esc(r.image) + '" alt="" referrerpolicy="no-referrer" '
+             + 'style="max-width:100%;height:auto;border-radius:6px"></p>';
+        }
+        h += '<div class="rss-onizleme">' + (r.body || '<p class="soluk">Gövde boş geldi.</p>') + '</div>';
+        if (r.link) {
+          h += '<p class="kucuk"><a href="' + M.esc(r.link) + '" target="_blank" rel="nofollow noopener">Kaynakta aç ↗</a></p>';
+        }
+        h += '<p><button type="button" class="dugme birincil" data-onizle-taslak="' + id + '">Taslak yap</button></p>';
+        var g = M.modal.ac(r.title || 'Önizleme', h);
+        if (g) {
+          var t = g.querySelector('[data-onizle-taslak]');
+          if (t) { t.addEventListener('click', function () { eylemUygula('draft', [id]); }); }
+        }
+      });
+    });
+  });
 
   M.qsa('[data-oge-eylem]').forEach(function (b) {
     b.addEventListener('click', function () {

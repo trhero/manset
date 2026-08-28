@@ -29,8 +29,24 @@ require_once INC_DIR . '/media.php';
 // ============================================================ ortak yardımcılar
 
 /** Yazma sonrası önbellek temizliği (inc/cache.php varsa). */
-function api_admin_flush() {
-    if (function_exists('cache_flush')) { cache_flush(); }
+/**
+ * Sayfa önbelleğini düşürür.
+ *
+ * KAPSAM (1.3-12): `$scope` verilmezse TÜM önbellek silinir — 1.2'ye kadarki
+ * davranış budur ve kapsamı bilinmeyen çağrılar için doğru olan da budur:
+ * eksik düşen bir önbellek okura ESKİ HABER gösterir, fazla düşen yalnız
+ * birkaç sayfayı yeniden ürettirir. Şüphede geniş düş.
+ *
+ * Ama kapsamı BİLDİĞİMİZ yerde dar düşmek gerçek bir kazançtır: bu yardımcı
+ * 15 ayrı ucu besliyor ve her biri bugüne kadar tek bir haber düzenlemesinde
+ * bütün sitenin önbelleğini siliyordu.
+ *
+ * @param string|array|null $scope 'post:12' · 'category' · ['post:12','category'] · null
+ */
+function api_admin_flush($scope = null) {
+    if (!function_exists('cache_flush')) { return; }
+    if ($scope === null) { cache_flush(); return; }
+    cache_flush($scope);
 }
 
 /** Oturumdaki kullanıcı — api.php yetki kapısından geçtiği için daima doludur. */
@@ -517,7 +533,10 @@ api_register('posts.save', function () {
         $msg = 'Haber oluşturuldu.';
     }
 
-    api_admin_flush();
+    // Haberin kendi sayfası + liste sayfaları (anasayfa/kategori/etiket/arama).
+    // Metin düzenlemesi de liste sayfalarının HTML'inde geçtiği için `post:<id>`
+    // etiketiyle zaten yakalanır; `category` durum/kategori/tarih değişimi içindir.
+    api_admin_flush(['post:' . (int)$id, 'category']);
 
     // ARAMA MOTORU BİLDİRİMİ (1.2-07): haber ŞU AN yayında ise adresi kuyruğa gir.
     // cron keşfi `posts.id` su işaretine bakıyor; var olan bir taslak yayına
@@ -550,7 +569,7 @@ api_register('posts.delete', function () {
     $d = json_body();
     $post = api_admin_load_post_for_trash((int)arr($d, 'id', 0), $u);
     api_admin_soft_delete_post((int)$post['id']);
-    api_admin_flush();
+    api_admin_flush(['post:' . (int)$post['id'], 'category']);
     return ['id' => (int)$post['id'], 'message' => 'Haber çöp kutusuna taşındı.'];
 }, ['perm' => 'posts.delete', 'methods' => ['POST']]);
 
@@ -574,7 +593,7 @@ api_register('posts.restore', function () {
     }
     q('UPDATE posts SET deleted_at = :bos, updated_at = :now WHERE id = :i',
       [':bos' => '', ':now' => now(), ':i' => (int)$post['id']]);
-    api_admin_flush();
+    api_admin_flush(['post:' . (int)$post['id'], 'category']);
     return ['id' => (int)$post['id'], 'message' => 'Haber geri alındı.'];
 }, ['perm' => 'posts.delete', 'methods' => ['POST']]);
 
@@ -612,7 +631,7 @@ api_register('posts.purge', function () {
 
     api_admin_audit($u, 'posts.purge', 'post#' . (int)$post['id'], (string)arr($post, 'title', ''));
     api_admin_purge_post((int)$post['id']);
-    api_admin_flush();
+    api_admin_flush(['post:' . (int)$post['id'], 'category']);
     return ['id' => (int)$post['id'], 'message' => 'Haber kalıcı olarak silindi.'];
 }, ['perm' => 'posts.delete', 'methods' => ['POST']]);
 
@@ -724,7 +743,7 @@ api_register('posts.takedown', function () {
     db_update('posts', ['status' => 'archived', 'updated_at' => now()], 'id = :id', [':id' => $id]);
     api_admin_audit($u, 'posts.takedown', 'post#' . $id,
         $sebep !== '' ? $sebep : (string)arr($post, 'title', ''));
-    api_admin_flush();
+    api_admin_flush(['post:' . $id, 'category']);
     return ['id' => $id, 'status' => 'archived', 'message' => 'Haber yayından kaldırıldı.'];
 }, ['perm' => 'posts.takedown', 'methods' => ['POST']]);
 
@@ -917,8 +936,17 @@ function api_admin_comment_apply($id, $action) {
     $id = (int)$id;
     if (!qv('SELECT 1 FROM comments WHERE id = :i', [':i' => $id])) { return 0; }
     if ($action === 'delete') {
+        // YANITLARI DA SİL (1.3-07). Kökü silip yanıtları bırakmak veri düzeyinde
+        // ARTIK üretir: ön yüz onları göstermez (ebeveyni yok), panel işaretler,
+        // ama satırlar sonsuza dek kalır ve moderatör sildiğini sanır.
+        // Zincir TEK SEVİYE olduğu için bir geçiş yeterlidir; daha derin bir
+        // zincir olsaydı burada özyineleme ya da döngü gerekirdi.
+        $yanit = 0;
+        if (function_exists('schema_has_column') && schema_has_column('comments', 'parent_id')) {
+            $yanit = (int)q('DELETE FROM comments WHERE parent_id = :i', [':i' => $id])->rowCount();
+        }
         q('DELETE FROM comments WHERE id = :i', [':i' => $id]);
-        return 1;
+        return 1 + $yanit;
     }
     $map = ['approve' => 'approved', 'spam' => 'spam', 'pending' => 'pending'];
     if (!isset($map[$action])) { return 0; }

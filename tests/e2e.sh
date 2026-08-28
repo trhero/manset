@@ -10,6 +10,10 @@
 set -u
 
 PHP="${PHP:-php}"
+# İKİ PORT KULLANILIR: PORT ve PORT+50.
+# PORT+50 RSS fikstür sunucusudur (bkz. §"fikstür"). Bu, belgelenmediği için
+# bir ajanın kendi geliştirme sunucusu 8952'yi tutunca BEŞ ilgisiz test kırmızı
+# yandı ve hata yorum kodunda sanıldı. Aşağıdaki denetim bunu ilk adımda söyler.
 PORT="${PORT:-8917}"
 
 # Veritabanı sürücüsü (1.1-11). Varsayılan sqlite; MySQL yolu CI'da koşar.
@@ -197,10 +201,44 @@ fi
 PHPV="$("${PHP}" -r 'echo PHP_VERSION;' 2>/dev/null)"
 ok "PHP ${PHPV}"
 
-for ext in pdo_sqlite mbstring; do
-  if "${PHP}" -m 2>/dev/null | tr -d '\r' | grep -qix "${ext}"; then ok "eklenti: ${ext}"
-  else bad "eklenti: ${ext}" "kurulu değil"; fi
-done
+# Sürücüye göre eklenti denetimi. Eskiden sürücüden bağımsız olarak yalnız
+# pdo_sqlite aranıyordu: `--driver=mysql` ile koşan ve pdo_mysql'i olmayan bir
+# ortam bu adımı YEŞİL geçip çok sonra, anlaşılmaz bir kurulum hatasıyla
+# düşüyordu. CI'da MySQL yolunun tek gerçek sınavı bu koşudur; hatanın nerede
+# olduğu ILK adımda belli olmalı.
+MANSET_EXT="pdo_sqlite mbstring"
+if [ "${MANSET_DRIVER}" = "mysql" ]; then MANSET_EXT="pdo_mysql mbstring"; fi
+# `php -m` BIR KEZ calisir. Eskiden eklenti basina ayri bir surec baslatiliyordu;
+# makinede cok sayida PHP sureci varken bu cagrilardan biri ara sira BOS ciktiyla
+# donuyor ve tur "eklenti kurulu degil" diyerek YANLIS yere isaret ediyordu.
+# (Iki ayri ajan bunu bagimsiz olarak, 13 ve 19 escamanli php surecinde olctu.)
+# Bos cikti ile "eklenti yok" AYRI seylerdir ve ayri raporlanmalidir.
+MANSET_MODLIST="$("${PHP}" -m 2>/dev/null | tr -d '\r')"
+if [ -z "${MANSET_MODLIST}" ]; then
+  bad "eklenti listesi okunamadi" "php -m bos dondu (surec sinirlari ya da bozuk kurulum)"
+else
+  for ext in ${MANSET_EXT}; do
+    if printf '%s\n' "${MANSET_MODLIST}" | grep -qix "${ext}"; then ok "eklenti: ${ext}"
+    else bad "eklenti: ${ext}" "kurulu degil"; fi
+  done
+fi
+
+# MySQL kipinde sunucuya ERKEN bağlan: erişilemiyorsa burada, açık bir mesajla
+# dur. Aksi halde tur onlarca adım ilerleyip "kurulum 200 döndü" gibi ilgisiz
+# bir hatayla düşer ve asıl neden kaybolur.
+if [ "${MANSET_DRIVER}" = "mysql" ]; then
+  MYSQLCHK="$("${PHP}" "${SCRIPT_DIR}/probe.php" . mysql_ping 2>&1 | tr -d '
+')"
+  if [ "${MYSQLCHK}" = "TAMAM" ]; then
+    ok "MySQL baglantisi hazir"
+  else
+    printf '%s
+' "$(c_red 'MySQL sunucusuna baglanilamadi.') ${MYSQLCHK}"
+    printf '%s
+' "MANSET_DB_HOST/PORT/NAME/USER/PASS degiskenlerini denetleyin."
+    exit 1
+  fi
+fi
 
 head1 "0.1 · Söz dizimi denetimi (php -l)"
 LINT_FAIL=0
@@ -295,6 +333,15 @@ SERVER_PID=$!
 # bir turun fikstür sunucusunu DİĞER turun ana sunucusunun portuna koyuyordu
 # (8921+1 = 8922). Ajan-C bunu ölçtü. +50 ile ana port aralığından uzaklaşır.
 FEED_PORT=$((PORT + 50))
+# Port DOLU mu? Doluysa fikstür sunucusu sessizce başlamaz ve ona bağlı testler
+# ilgisiz nedenlerle düşer. Hatanın nerede olduğu burada belli olsun.
+if "${PHP}" -r 'exit(@fsockopen($argv[1], (int)$argv[2], $e, $s, 1) ? 0 : 1);' "${HOST}" "${FEED_PORT}" 2>/dev/null; then
+  printf '%s
+' "$(c_red "Port ${FEED_PORT} kullanımda.") RSS fikstür sunucusu bu portu ister (PORT+50)."
+  printf '%s
+' "Başka bir PORT seçin ya da o portu dinleyen süreci durdurun."
+  exit 1
+fi
 FEED_BASE="http://${HOST}:${FEED_PORT}"
 "${PHP}" -S "${HOST}:${FEED_PORT}" -t "${SCRIPT_DIR}/fixtures" > "${T}.feed.log" 2>&1 &
 FEED_PID=$!
@@ -1439,7 +1486,7 @@ fi
 if [ -n "${UYEID}" ] && [ "${UYEID}" != "0" ]; then
   # Üyeyi doğrulanmış say ve giriş yap (kendi kavanozu)
   dbq "UPDATE member_tokens SET used_at = '2026-01-01 00:00:00' WHERE user_id = ${UYEID} AND kind = 'verify'" >/dev/null
-  UJAR="${SCRIPT_DIR}/.ucookies"
+  UJAR="${T}.ucookies"
   rm -f "${UJAR}"
   UCSRF="$(curl -s -c "${UJAR}" -b "${UJAR}" "${BASE}/api.php?a=public.csrf" 2>/dev/null | grep -o '"csrf":"[^"]*"' | sed 's/.*:"//;s/"//')"
   printf '{"email":"e2euye@ornek.test","password":"uyeparola123","_csrf":"%s"}' "${UCSRF}" \
@@ -1636,7 +1683,7 @@ else bad "OTURUMLU YANIT ÖNBELLEKLENEBİLİR" "$(printf '%s' "${BASLIK_OTURUM}"
 dbq "UPDATE posts SET visibility = 'public' WHERE id = ${PREMID2}" >/dev/null
 # --- KRİTİK: theme.css kilitli izni gerçekten kapı mı
 dbq "UPDATE users SET role = 'seo_editor' WHERE email = 'yazar@ornek.test'" >/dev/null
-SJAR="${SCRIPT_DIR}/.scookies"
+SJAR="${T}.scookies"
 rm -f "${SJAR}"
 curl -s -c "${SJAR}" -o "${T}.body" "${BASE}/admin/" 2>/dev/null
 SC="$(grep -o 'name="_csrf" value="[^"]*"' "${T}.body" | head -1 | sed 's/.*value="//;s/"$//')"
@@ -1949,6 +1996,16 @@ post_json "${BASE}/odeme.php?webhook=1" '{"tutar":1,"durum":"basarili"}'
 if [ "${HTTP_CODE}" = "200" ]; then bad "imzasız webhook kabul edildi" "abonelik sahte ödemeyle uzatılabilir"
 else ok "imzasız webhook reddedildi (HTTP ${HTTP_CODE})"; fi
 
+# --- KILITLI GOVDE SIZINTISI (denetim turu 5, D2-01 - KRITIK)
+# Bu sinif IKI KEZ tekrarladi: tur 2'de beslemelerden, tur 5'te arama ucundan
+# (govde alintisi anonime donuyordu ve arama terimi kaydirilarak metin yuruye
+# yuruye cikarilabiliyordu). Her yeni "icerikten parca goster" ozelligi bu kapiyi
+# yeniden acma riski tasir; sonda kilitli bir haber uydurup metin ureten yollari
+# ANONIM olarak cagirir.
+SIZSONDA="$("${PHP}" "${SCRIPT_DIR}/probe.php" "${RUN}" paywall_leak 2>&1 | tr -d '')"
+if [ -z "${SIZSONDA}" ]; then ok "kilitli govde hicbir metin yolundan sizmiyor"
+else bad "kilitli govde SIZIYOR" "sizan yollar: ${SIZSONDA}"; fi
+
 # --- Sırlar yedekte düz metin durmamalı (denetim turu 4, YÜKSEK-1)
 # 1.2'nin zamanlı uzak yedeği veritabanını ÜÇÜNCÜ TARAF bir FTP sunucusuna
 # gönderiyor. Denetçi gerçek bir yedekten ödeme sağlayıcı tuzunu okuyup onunla
@@ -1956,7 +2013,8 @@ else ok "imzasız webhook reddedildi (HTTP ${HTTP_CODE})"; fi
 #
 # Sonda üzerinden koşuyor: kabuktan `php -r` ile gömülü yol göndermek Git Bash'te
 # kırılgan (bkz. tests/probe.php başlığı) — ilk denemede tur burada asıldı.
-SIRSONDA="$("${PHP}" "${SCRIPT_DIR}/probe.php" "${RUN}" backup_secret 2>&1 | tr -d '')"
+SIRSONDA="$("${PHP}" "${SCRIPT_DIR}/probe.php" "${RUN}" backup_secret 2>&1 | tr -d '
+')"
 case "${SIRSONDA}" in
   TAMAM*)      ok "API anahtarı yedekte şifreli ve uygulama içinden çözülüyor" ;;
   DUZ_METIN*)  bad "API anahtarı yedekte DÜZ METİN" "yedek çalınırsa sağlayıcı anahtarı da çalınır" ;;

@@ -712,7 +712,15 @@ function cron_publish_scheduled() {
             if ($tam) { seo_ping_enqueue(url_post($tam), 'indexnow'); }
         }
     }
-    if ($rows && function_exists('cache_flush')) { cache_flush(); }
+    // KAPSAMLI DÜŞÜŞ (1.3-12): yalnız yayına alınan haberlerin sayfaları ve
+    // liste sayfaları. Eskiden tek bir zamanlanmış haber bütün sitenin
+    // önbelleğini siliyordu — zamanlanmış yayın gece yarısı toplu çalıştığı
+    // için bu, sitenin en sessiz saatinde önbelleğin tümden boşalması demekti.
+    if ($rows && function_exists('cache_flush')) {
+        $kapsam = ['category'];
+        foreach ($rows as $r) { $kapsam[] = 'post:' . (int)$r['id']; }
+        cache_flush($kapsam);
+    }
     return count($rows) . ' haber yayına alındı';
 }
 

@@ -16,15 +16,19 @@
   var ETIKET = {
     p: ['class'], br: [], hr: [], strong: [], b: [], em: [], i: [], u: [], s: [],
     sub: [], sup: [], h2: [], h3: [], h4: [], ul: [], ol: [], li: [],
+    dl: ['class'], dt: [], dd: [], small: [],
     blockquote: ['cite'],
     a: ['href', 'title', 'target', 'rel'],
     img: ['src', 'alt', 'title', 'width', 'height', 'loading', 'srcset', 'sizes'],
     figure: ['class'], figcaption: [],
-    table: [], thead: [], tbody: [], tr: [],
-    th: ['colspan', 'rowspan'], td: ['colspan', 'rowspan'],
+    table: [], caption: [], thead: [], tbody: [], tfoot: [], tr: [],
+    th: ['colspan', 'rowspan', 'scope'], td: ['colspan', 'rowspan'],
     iframe: ['src', 'width', 'height', 'allow', 'allowfullscreen', 'title'],
     span: ['class'], div: ['class'], code: [], pre: []
   };
+
+  /** `scope` için kapalı sözcük kümesi (sunucu tarafıyla aynı). */
+  var SCOPE = ['row', 'col', 'rowgroup', 'colgroup'];
 
   /** İçeriğiyle birlikte tamamen atılan etiketler. */
   var YOKET = ['script', 'style', 'noscript', 'template', 'object', 'embed', 'applet',
@@ -105,6 +109,12 @@
           if (kalan.length) { d.setAttribute('class', kalan.join(' ')); }
           else { d.removeAttribute('class'); }
         }
+        if (an === 'scope') {
+          // Kapalı küme — sunucudaki sanitize_walk() ile birebir aynı kural.
+          var sv = String(av).trim().toLowerCase();
+          if (SCOPE.indexOf(sv) >= 0) { d.setAttribute('scope', sv); }
+          else { d.removeAttribute(oz[j].name); }
+        }
       }
 
       if (ad === 'a') {
@@ -136,15 +146,144 @@
     }
   }
 
+  /**
+   * Güvenilmeyen HTML'i ETKİSİZ (inert) bir belgede ayrıştırır.
+   *
+   * GÜVENLİK — NEDEN `document.createElement('div').innerHTML` DEĞİL:
+   * Bağlantısız (detached) bir düğüme `innerHTML` yazmak `<script>` çalıştırmaz
+   * AMA görsel yüklemesini BAŞLATIR: `<img src=x onerror=alert(1)>` tarayıcının
+   * "görsel verisini güncelle" adımını tetikler ve `onerror` düğüm belgede
+   * olmasa bile ateşlenir. Panelde bu, oturumlu bir bağlamda kod çalıştırmak
+   * demektir — yani yapıştırmayla tetiklenen gerçek bir XSS.
+   *
+   * `DOMParser.parseFromString(..., 'text/html')` ETKİSİZ bir belge üretir:
+   * betik çalışmaz, hiçbir kaynak (img/iframe) İSTENMEZ. Temizlik bu belgede
+   * yapılır, geriye yalnız DİZE döner.
+   *
+   * DOMParser yoksa (çok eski tarayıcı) yedeğe düşülür; o yolda olay
+   * öznitelikleri ayrıştırmadan ÖNCE dizeden kazınır.
+   *
+   * @returns {{doc: Document, kok: Element}}
+   */
+  function guvenliAyristir(html) {
+    var s = String(html == null ? '' : html);
+    if (typeof window.DOMParser === 'function') {
+      try {
+        var d = new DOMParser().parseFromString('<body>' + s + '</body>', 'text/html');
+        if (d && d.body) { return { doc: d, kok: d.body }; }
+      } catch (e) { /* yedeğe düş */ }
+    }
+    // YEDEK YOL: olay öznitelikleri ve javascript: şeması dizede kazınır,
+    // çünkü aşağıdaki innerHTML canlı belgede ayrıştırma yapacak.
+    s = s.replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, ' ');
+    s = s.replace(/(src|href|xlink:href)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi, '');
+    var kap = document.createElement('div');
+    kap.innerHTML = s;
+    return { doc: document, kok: kap };
+  }
+
   /** HTML dizesini temizler ve dize olarak döndürür. */
   function htmlTemizle(html) {
-    var kap = document.createElement('div');
-    kap.innerHTML = String(html == null ? '' : html);
+    var kap = guvenliAyristir(html).kok;
     temizleDugum(kap);
     var cikti = kap.innerHTML;
     // Boş paragrafları sadeleştir
     cikti = cikti.replace(/<p>(\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, '');
     return cikti.trim();
+  }
+
+  /* ==========================================================================
+     BİÇİMLİ YAPIŞTIRMA (Word / Google Docs)
+     ==========================================================================
+     Eskiden her yapıştırma DÜZ METNE indiriliyordu: güvenliydi ama muhabir
+     Word'de hazırladığı haberi yapıştırdığında bütün paragraf düzeni, kalın/
+     italik ve bağlantılar gidiyordu. Şimdi biçim KORUNUYOR, çöp AYIKLANIYOR.
+
+     İki aşama var, ikisi de ayrı ayrı ölçülebilsin diye ayrılmıştır:
+
+       1) yapistirmaOnTemizlik(html)  — SAF DİZE İŞLEMİ, DOM gerektirmez.
+          Word'ün koşullu yorumlarını (`<!--[if gte mso 9]>…`), `<xml>` blokunu,
+          `<style>` blokunu, `o:p / w: / m:` ad alanı etiketlerini ve HTML
+          yorumlarını atar. Bunlar DOM'a hiç girmemelidir: koşullu yorumun
+          İÇİNDE tam bir belge (`<w:WordDocument>`) durur ve innerHTML'e
+          verildiğinde tarayıcıdan tarayıcıya farklı ayrıştırılır.
+
+       2) temizleDugum(...)           — beyaz liste (zaten vardı).
+          `style` özniteliği ve `Mso…` sınıfları burada düşer, sınıfsız
+          span/div sarmalı açılır.
+
+     Arada bir ÖN GEÇİŞ var: Google Docs bütün seçimi
+     `<b style="font-weight:normal" id="docs-internal-guid-…">` içine sarar.
+     `style` beyaz listede olmadığı için düşer ve geriye GERÇEK bir `<b>` kalır
+     — yani yapıştırılan haberin TAMAMI kalın olur. Bu yüzden stili nötrleyen
+     b/strong/i/em sarmalları, stil silinmeden ÖNCE açılır.
+     ========================================================================== */
+
+  /** Aşama 1 — saf dize temizliği (DOM'suz, testi kolay). */
+  function yapistirmaOnTemizlik(html) {
+    var s = String(html == null ? '' : html);
+    // Word koşullu yorumları (içeriğiyle birlikte)
+    s = s.replace(/<!--\[if[\s\S]*?<!\[endif\]-->/gi, '');
+    s = s.replace(/<!\[if[\s\S]*?<!\[endif\]>/gi, '');
+    // <xml>…</xml> (Word belge üstverisi) ve <style>…</style>
+    s = s.replace(/<\s*xml\b[\s\S]*?<\s*\/\s*xml\s*>/gi, '');
+    s = s.replace(/<\s*style\b[\s\S]*?<\s*\/\s*style\s*>/gi, '');
+    s = s.replace(/<\s*script\b[\s\S]*?<\s*\/\s*script\s*>/gi, '');
+    // Kalan HTML yorumları
+    s = s.replace(/<!--[\s\S]*?-->/g, '');
+    // Ad alanlı Word/Office etiketleri: <o:p>, </o:p>, <w:sdt>, <m:oMath>…
+    s = s.replace(/<\/?[a-z]+:[a-z0-9_-]+[^>]*>/gi, '');
+    // Word'ün bölüm/sayfa ayraçları
+    s = s.replace(/<\s*(hr)[^>]*class="?msonormal/gi, '<$1 class="msonormal');
+    return s;
+  }
+
+  /** Aşama 2 öncesi — stili nötrleyen b/strong/i/em sarmallarını açar. */
+  function sahteVurguAc(kok) {
+    var adaylar = kok.querySelectorAll ? kok.querySelectorAll('b,strong,i,em') : [];
+    for (var i = adaylar.length - 1; i >= 0; i--) {
+      var d = adaylar[i];
+      var st = String(d.getAttribute('style') || '').toLowerCase().replace(/\s+/g, '');
+      var kalin = (d.nodeName === 'B' || d.nodeName === 'STRONG');
+      var sahte = kalin ? /font-weight:(normal|400)/.test(st) : /font-style:normal/.test(st);
+      if (!sahte) { continue; }
+      while (d.firstChild) { d.parentNode.insertBefore(d.firstChild, d); }
+      d.parentNode.removeChild(d);
+    }
+  }
+
+  /** Blok olarak kullanılmış sınıfsız div'leri paragrafa çevirir. */
+  function divleriParagrafaCevir(kok) {
+    var divler = kok.querySelectorAll ? kok.querySelectorAll('div') : [];
+    for (var i = divler.length - 1; i >= 0; i--) {
+      var d = divler[i];
+      if (d.querySelector && d.querySelector('p,div,table,ul,ol,figure,blockquote')) { continue; }
+      // DİKKAT: `kok` etkisiz bir DOMParser belgesinde olabilir; yeni düğüm o
+      // belgede üretilmeli, yoksa Firefox 'WrongDocumentError' atar.
+      var p = (d.ownerDocument || document).createElement('p');
+      while (d.firstChild) { p.appendChild(d.firstChild); }
+      d.parentNode.replaceChild(p, d);
+    }
+  }
+
+  /**
+   * Panodan gelen HTML'i gövdeye girebilecek hâle indirir.
+   * @returns {string} temiz HTML (boşsa çağıran düz metne düşmelidir)
+   */
+  function yapistirmaTemizle(html) {
+    // PANO GÜVENİLMEZDİR: etkisiz belgede ayrıştır (bkz. guvenliAyristir).
+    var kap = guvenliAyristir(yapistirmaOnTemizlik(html)).kok;
+    sahteVurguAc(kap);
+    divleriParagrafaCevir(kap);
+    temizleDugum(kap);
+
+    var s = kap.innerHTML;
+    // Word'ün sert boşlukları: satır içinde normal boşluğa iner.
+    s = s.replace(/(&nbsp;| ){2,}/g, ' ');
+    // Boş paragraf / boş başlık / boş hücre kalıntıları
+    s = s.replace(/<(p|h2|h3|h4|li)>(\s|&nbsp;| |<br\s*\/?>)*<\/\1>/gi, '');
+    s = s.replace(/<(p|h2|h3|h4)>\s*<\/\1>/gi, '');
+    return s.trim();
   }
 
   /* ---------------------------------------------------- araç çubuğu tanımı */
@@ -179,6 +318,10 @@
     { ad: 'ol',         etiket: svg('<path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 5.5 5.2 5v3.5M3.4 15.2c0-.7.6-1.2 1.3-1.2s1.3.5 1.3 1.2c0 1.2-2.6 1.8-2.6 3.3h2.8"/>'), baslik: 'Numaralı liste',       komut: 'insertOrderedList' },
     { ad: 'hr',         etiket: svg('<path d="M3 12h18"/>'), baslik: 'Ayraç çizgisi',        komut: 'insertHorizontalRule' },
     { ayrac: true },
+    { ad: 'table',      etiket: svg('<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16M15 4v16"/>'), baslik: 'Tablo ekle / düzenle' },
+    { ad: 'embed',      etiket: svg('<rect x="2" y="5" width="20" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/>'), baslik: 'Gömme ekle (YouTube, Vimeo, X, Instagram)' },
+    { ayrac: true },
+    { ad: 'preview',    etiket: svg('<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'), baslik: 'Taslak önizleme bağlantısı' },
     { ad: 'clear',      etiket: svg('<path d="M4 7V5h13v2"/><path d="M10 5v9"/><path d="M7 19h7"/><path d="m16 14 5 5m0-5-5 5"/>'), baslik: 'Biçimi temizle' }
   ];
 
@@ -218,7 +361,7 @@
     var sKarakter = document.createElement('span');
     var sIpucu = document.createElement('span');
     sIpucu.className = 'soluk';
-    sIpucu.textContent = 'Yapıştırılan metin düz metne çevrilir.';
+    sIpucu.textContent = 'Word/Docs yapıştırması temizlenir · Ctrl+S kaydeder · Ctrl+Shift+V düz metin';
     durum.appendChild(sKelime);
     durum.appendChild(sKarakter);
     durum.appendChild(sIpucu);
@@ -256,8 +399,10 @@
 
     /** Temiz HTML üretir (canlı DOM'a dokunmadan, kopya üzerinden). */
     function temizCikti() {
-      var kopya = document.createElement('div');
-      kopya.innerHTML = alan.innerHTML;
+      // Etkisiz belgede kopyala: içerik zaten canlı editörde ama bu yol her
+      // senkronda çalışıyor; canlı belgede yeniden ayrıştırmak her tuş
+      // vuruşunda görsel isteği tetiklerdi.
+      var kopya = guvenliAyristir(alan.innerHTML).kok;
       temizleDugum(kopya);
       var s = kopya.innerHTML.replace(/<p>(\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, '');
       return s.trim();
@@ -404,6 +549,264 @@
       });
     }
 
+    /* -------------------------------------------------- HTML ekleme yardımcısı */
+    function htmlEkle(html) {
+      araligiGeriYukle();
+      try { document.execCommand('insertHTML', false, html); }
+      catch (e) { alan.insertAdjacentHTML('beforeend', html); }
+      senkron(true);
+      durumGuncelle();
+    }
+
+    /* -------------------------------------------------- tablo */
+
+    /** İmlecin bulunduğu hücre / satır / tablo (yoksa null). */
+    function tabloBaglam() {
+      var sel = window.getSelection();
+      var d = (sel && sel.rangeCount) ? sel.getRangeAt(0).startContainer : null;
+      var hucre = null, tablo = null;
+      while (d && d !== alan) {
+        if (d.nodeType === 1) {
+          var ad = d.nodeName.toLowerCase();
+          if (!hucre && (ad === 'td' || ad === 'th')) { hucre = d; }
+          if (ad === 'table') { tablo = d; break; }
+        }
+        d = d.parentNode;
+      }
+      if (!tablo) { return null; }
+      var satir = hucre ? hucre.parentNode : null;
+      return { tablo: tablo, satir: satir, hucre: hucre,
+               sutun: (hucre && satir) ? Array.prototype.indexOf.call(satir.cells, hucre) : -1 };
+    }
+
+    /** rows×cols boş tablo HTML'i (başlık satırı `scope="col"` ile). */
+    function tabloHtml(satir, sutun) {
+      var h = '<table><caption>Tablo açıklaması</caption><thead><tr>';
+      for (var s = 0; s < sutun; s++) { h += '<th scope="col">Başlık ' + (s + 1) + '</th>'; }
+      h += '</tr></thead><tbody>';
+      for (var r = 0; r < satir; r++) {
+        h += '<tr>';
+        for (var c = 0; c < sutun; c++) { h += '<td>&nbsp;</td>'; }
+        h += '</tr>';
+      }
+      return h + '</tbody></table><p><br></p>';
+    }
+
+    /** Satır ekle: yon = -1 üst, +1 alt. */
+    function satirEkle(ctx, yon) {
+      if (!ctx || !ctx.satir) { return; }
+      var kaynak = ctx.satir;
+      var yeni = kaynak.cloneNode(true);
+      for (var i = 0; i < yeni.cells.length; i++) {
+        // Klon her zaman VERİ hücresi olur: başlık satırının altına ikinci bir
+        // başlık satırı eklemek tabloyu erişilebilirlik açısından bozardı.
+        var eski = yeni.cells[i];
+        var td = document.createElement('td');
+        td.innerHTML = '&nbsp;';
+        if (eski.getAttribute('colspan')) { td.setAttribute('colspan', eski.getAttribute('colspan')); }
+        eski.parentNode.replaceChild(td, eski);
+      }
+      var hedefGovde = kaynak.parentNode;
+      if (kaynak.parentNode.nodeName.toLowerCase() === 'thead' && yon > 0) {
+        // Başlıktan sonra eklenen satır gövdeye gider
+        var tb = ctx.tablo.querySelector('tbody');
+        if (tb) { tb.insertBefore(yeni, tb.firstChild); senkron(true); return; }
+      }
+      hedefGovde.insertBefore(yeni, yon < 0 ? kaynak : kaynak.nextSibling);
+      senkron(true);
+    }
+
+    /** Sütun ekle: yon = -1 sol, +1 sağ. */
+    function sutunEkle(ctx, yon) {
+      if (!ctx || ctx.sutun < 0) { return; }
+      var satirlar = ctx.tablo.rows;
+      for (var i = 0; i < satirlar.length; i++) {
+        var sr = satirlar[i];
+        var ref = sr.cells[ctx.sutun];
+        var basliktir = ref && ref.nodeName.toLowerCase() === 'th';
+        var yeni = document.createElement(basliktir ? 'th' : 'td');
+        if (basliktir) { yeni.setAttribute('scope', 'col'); yeni.textContent = 'Başlık'; }
+        else { yeni.innerHTML = '&nbsp;'; }
+        if (!ref) { sr.appendChild(yeni); }
+        else { sr.insertBefore(yeni, yon < 0 ? ref : ref.nextSibling); }
+      }
+      senkron(true);
+    }
+
+    function satirSil(ctx) {
+      if (!ctx || !ctx.satir) { return; }
+      if (ctx.tablo.rows.length <= 1) { tabloSil(ctx); return; }
+      ctx.satir.parentNode.removeChild(ctx.satir);
+      senkron(true);
+    }
+
+    function sutunSil(ctx) {
+      if (!ctx || ctx.sutun < 0) { return; }
+      var satirlar = ctx.tablo.rows;
+      if (satirlar[0] && satirlar[0].cells.length <= 1) { tabloSil(ctx); return; }
+      for (var i = 0; i < satirlar.length; i++) {
+        var h = satirlar[i].cells[ctx.sutun];
+        if (h) { satirlar[i].removeChild(h); }
+      }
+      senkron(true);
+    }
+
+    function tabloSil(ctx) {
+      if (!ctx || !ctx.tablo) { return; }
+      ctx.tablo.parentNode.removeChild(ctx.tablo);
+      if (!alan.innerHTML.trim()) { alan.innerHTML = '<p><br></p>'; }
+      senkron(true);
+    }
+
+    function tabloAraci() {
+      araligiSakla();
+      var ctx = tabloBaglam();
+      if (!window.M || !M.modal) {
+        if (!ctx) { htmlEkle(tabloHtml(2, 3)); }
+        return;
+      }
+      var html;
+      if (ctx) {
+        html = '<p class="soluk">İmleç bir tablonun içinde.</p>'
+             + '<div class="dugme-grup" style="flex-wrap:wrap;gap:6px">'
+             + '<button type="button" class="dugme kucuk" data-tb="satir-ust">Üste satır</button>'
+             + '<button type="button" class="dugme kucuk" data-tb="satir-alt">Alta satır</button>'
+             + '<button type="button" class="dugme kucuk" data-tb="sutun-sol">Sola sütun</button>'
+             + '<button type="button" class="dugme kucuk" data-tb="sutun-sag">Sağa sütun</button>'
+             + '<button type="button" class="dugme kucuk" data-tb="satir-sil">Satırı sil</button>'
+             + '<button type="button" class="dugme kucuk" data-tb="sutun-sil">Sütunu sil</button>'
+             + '<button type="button" class="dugme kucuk" data-tb="tablo-sil">Tabloyu sil</button>'
+             + '</div>';
+      } else {
+        html = '<div class="form-alan"><label for="edTbSatir">Satır</label>'
+             + '<input type="number" id="edTbSatir" min="1" max="30" value="3"></div>'
+             + '<div class="form-alan"><label for="edTbSutun">Sütun</label>'
+             + '<input type="number" id="edTbSutun" min="1" max="10" value="3"></div>'
+             + '<div class="dugme-grup"><button type="button" class="dugme birincil" data-tb="ekle">Tabloyu ekle</button></div>';
+      }
+      var govde = M.modal.ac('Tablo', html, '460px');
+      M.qsa('[data-tb]', govde).forEach(function (b) {
+        b.addEventListener('click', function () {
+          var eylem = b.getAttribute('data-tb');
+          if (eylem === 'ekle') {
+            var r = Math.max(1, Math.min(30, parseInt(govde.querySelector('#edTbSatir').value, 10) || 3));
+            var c = Math.max(1, Math.min(10, parseInt(govde.querySelector('#edTbSutun').value, 10) || 3));
+            M.modal.kapat();
+            htmlEkle(tabloHtml(r, c));
+            return;
+          }
+          // Düzenleme eylemleri canlı DOM üzerinde çalışır; bağlam TAZE okunur.
+          var g = tabloBaglam();
+          if (eylem === 'satir-ust')  { satirEkle(g, -1); }
+          if (eylem === 'satir-alt')  { satirEkle(g, 1); }
+          if (eylem === 'sutun-sol')  { sutunEkle(g, -1); }
+          if (eylem === 'sutun-sag')  { sutunEkle(g, 1); }
+          if (eylem === 'satir-sil')  { satirSil(g); }
+          if (eylem === 'sutun-sil')  { sutunSil(g); }
+          if (eylem === 'tablo-sil')  { tabloSil(g); M.modal.kapat(); }
+        });
+      });
+    }
+
+    /* -------------------------------------------------- gömme */
+
+    /**
+     * Gömme adresi SUNUCUDA çözülür (api.php?a=embed.resolve).
+     * İstemcide oEmbed çağrısı YAPILMAZ: (1) tarayıcıdan atılan istek okurun
+     * IP'sini sağlayıcıya verir, (2) SSRF kalkanı ve önbellek sunucudadır,
+     * (3) gövdeye girecek işaretlemeye istemci karar veremez.
+     */
+    function gommeEkle() {
+      araligiSakla();
+      if (!window.M || !M.modal) { return; }
+      var govde = M.modal.ac('Gömme ekle',
+        '<div class="form-alan"><label for="edGomUrl">Adres</label>'
+        + '<input type="text" id="edGomUrl" placeholder="https://www.youtube.com/watch?v=…"></div>'
+        + '<p class="soluk">YouTube, Vimeo, X ve Instagram desteklenir. '
+        + 'X ve Instagram gönderileri betik yüklemeyen bir <strong>bağlantı kartı</strong> olarak eklenir.</p>'
+        + '<div class="dugme-grup"><button type="button" class="dugme birincil" id="edGomTamam">Ekle</button>'
+        + '<button type="button" class="dugme" id="edGomVazgec">Vazgeç</button></div>'
+        + '<div id="edGomDurum" class="soluk" role="status"></div>', '520px');
+
+      var girdi = govde.querySelector('#edGomUrl');
+      var durumEl = govde.querySelector('#edGomDurum');
+      var dugme = govde.querySelector('#edGomTamam');
+      girdi.focus();
+
+      function calis() {
+        var u = String(girdi.value || '').trim();
+        if (!u) { return; }
+        dugme.disabled = true;
+        durumEl.textContent = 'Çözümleniyor…';
+        M.api('embed.resolve', { url: u }).then(function (r) {
+          dugme.disabled = false;
+          if (!r || !r.ok) {
+            durumEl.textContent = (r && r.error) ? r.error : 'Gömme çözümlenemedi.';
+            return;
+          }
+          M.modal.kapat();
+          // SUNUCUDAN GELEN HTML DE İSTEMCİ BEYAZ LİSTESİNDEN GEÇER.
+          // Sunucu zaten sanitize_html() uyguladı; burada ikinci kez süzmek
+          // "sunucu yanıtına güven" varsayımını hiç kurmamak içindir.
+          var temiz = htmlTemizle(r.html || '');
+          if (!temiz) { M.toast('err', 'Gömme yerel denetimden geçemedi.'); return; }
+          htmlEkle(temiz + '<p><br></p>');
+          M.toast('ok', (r.cached ? 'Gömme eklendi (önbellek).' : 'Gömme eklendi.'));
+        });
+      }
+      dugme.addEventListener('click', calis);
+      govde.querySelector('#edGomVazgec').addEventListener('click', function () { M.modal.kapat(); });
+      girdi.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); calis(); }
+      });
+    }
+
+    /* -------------------------------------------------- taslak önizleme bağlantısı */
+
+    /** Düzenlenen haberin kimliği (posts.php'deki gizli `id` alanından). */
+    function haberKimligi() {
+      if (opts.postId) { return parseInt(opts.postId, 10) || 0; }
+      var f = ta.form;
+      var el = f ? f.querySelector('input[name=id]') : null;
+      return el ? (parseInt(el.value, 10) || 0) : 0;
+    }
+
+    function onizlemeBaglantisi() {
+      if (!window.M || !M.modal) { return; }
+      var id = haberKimligi();
+      if (id <= 0) {
+        M.toast('err', 'Önce haberi kaydedin; önizleme bağlantısı kayıtlı bir taslağa üretilir.');
+        return;
+      }
+      var govde = M.modal.ac('Taslak önizleme bağlantısı',
+        '<p class="soluk">Bağlantı <strong>süreli</strong>dir, yalnız bu haberi açar, '
+        + 'arama motorlarına kapalıdır ve açan kişiye oturum vermez.</p>'
+        + '<div class="form-alan"><label for="edOnSaat">Geçerlilik (saat)</label>'
+        + '<input type="number" id="edOnSaat" min="1" max="168" value="48"></div>'
+        + '<div class="dugme-grup"><button type="button" class="dugme birincil" id="edOnUret">Bağlantı üret</button>'
+        + '<button type="button" class="dugme" id="edOnGeri">Bağlantıları geri çek</button></div>'
+        + '<div id="edOnSonuc" role="status"></div>', '560px');
+
+      var sonucEl = govde.querySelector('#edOnSonuc');
+      govde.querySelector('#edOnUret').addEventListener('click', function () {
+        var saat = parseInt(govde.querySelector('#edOnSaat').value, 10) || 48;
+        sonucEl.textContent = 'Üretiliyor…';
+        M.api('preview.create', { id: id, hours: saat }).then(function (r) {
+          if (!r || !r.ok) { sonucEl.textContent = (r && r.error) ? r.error : 'Bağlantı üretilemedi.'; return; }
+          sonucEl.innerHTML = '<p><a href="' + M.esc(r.url) + '" target="_blank" rel="noopener noreferrer">'
+            + M.esc(r.url) + '</a></p><p class="soluk">' + M.esc(r.note || '')
+            + ' Son kullanma: ' + M.esc(r.expires_at || '') + '</p>';
+        });
+      });
+      govde.querySelector('#edOnGeri').addEventListener('click', function () {
+        sonucEl.textContent = 'Geri çekiliyor…';
+        M.api('preview.revoke', { id: id }).then(function (r) {
+          sonucEl.textContent = (r && r.ok) ? (r.message || 'Geri çekildi.')
+                                            : ((r && r.error) ? r.error : 'İşlem başarısız.');
+        });
+      });
+    }
+
     /* -------------------------------------------------- biçim temizle */
     function bicimTemizle() {
       komutCalistir('removeFormat');
@@ -437,6 +840,9 @@
         if (tanim.komut) { komutCalistir(tanim.komut); return; }
         if (tanim.ad === 'link') { baglantiEkle(); return; }
         if (tanim.ad === 'image') { gorselEkle(); return; }
+        if (tanim.ad === 'table') { tabloAraci(); return; }
+        if (tanim.ad === 'embed') { gommeEkle(); return; }
+        if (tanim.ad === 'preview') { onizlemeBaglantisi(); return; }
         if (tanim.ad === 'clear') { bicimTemizle(); return; }
       });
       cubuk.appendChild(b);
@@ -471,12 +877,9 @@
     alan.addEventListener('mouseup', function () { araligiSakla(); durumGuncelle(); });
     alan.addEventListener('blur', function () { araligiSakla(); senkron(false); });
 
-    // Yapıştırma daima düz metin
-    alan.addEventListener('paste', function (e) {
-      e.preventDefault();
-      var pano = e.clipboardData || window.clipboardData;
-      var metin = pano ? (pano.getData('text/plain') || '') : '';
-      metin = metin.replace(/\r\n/g, '\n');
+    /** Düz metni imlece yazar (biçimli yol tutmadığında yedek). */
+    function duzMetinYapistir(metin) {
+      metin = String(metin || '').replace(/\r\n/g, '\n');
       if (!metin) { return; }
       try { document.execCommand('insertText', false, metin); }
       catch (err) {
@@ -488,6 +891,33 @@
           r.collapse(false);
         }
       }
+    }
+
+    /*
+     * BİÇİMLİ YAPIŞTIRMA.
+     * Pano HTML taşıyorsa temizlenip eklenir; taşımıyorsa (ya da temizlikten
+     * geriye bir şey kalmıyorsa) düz metne düşülür. Ctrl+Shift+V ZORLA düz
+     * metindir — muhabir "hiçbir biçim istemiyorum" diyebilmelidir.
+     */
+    alan.addEventListener('paste', function (e) {
+      e.preventDefault();
+      var pano = e.clipboardData || window.clipboardData;
+      if (!pano) { return; }
+
+      var duzZorla = e.shiftKey === true;
+      var ham = duzZorla ? '' : (pano.getData('text/html') || '');
+      if (ham) {
+        var temiz = '';
+        try { temiz = yapistirmaTemizle(ham); } catch (eT) { temiz = ''; }
+        if (temiz) {
+          try { document.execCommand('insertHTML', false, temiz); }
+          catch (eI) { alan.insertAdjacentHTML('beforeend', temiz); }
+          senkron(true);
+          durumGuncelle();
+          return;
+        }
+      }
+      duzMetinYapistir(pano.getData('text/plain') || '');
       senkron(true);
     });
 
@@ -514,6 +944,29 @@
     // Form gönderiminden hemen önce son senkron
     var form = ta.form;
     if (form) { form.addEventListener('submit', function () { senkron(false); }); }
+
+    /*
+     * CTRL+S = KAYDET.
+     * Dinleyici FORMA bağlanır, belgeye değil: panelde aynı anda başka formlar
+     * da olabilir ve editörün kısayolu yalnız kendi formunu göndermelidir.
+     * Kaydetme akışını BİZ yazmayız — `requestSubmit()` formun kendi `submit`
+     * olayını tetikler, haber ekranındaki mevcut dinleyici işi yapar
+     * (admin/pages/posts.php Ajan-F'nin dosyasıdır, oraya dokunulmadı).
+     */
+    if (form) {
+      form.addEventListener('keydown', function (e) {
+        if (!(e.ctrlKey || e.metaKey) || e.altKey) { return; }
+        if (String(e.key || '').toLowerCase() !== 's') { return; }
+        e.preventDefault();
+        senkron(false);
+        if (typeof form.requestSubmit === 'function') { form.requestSubmit(); return; }
+        // Eski tarayıcı yedeği: iptal edilebilir submit olayı gönder.
+        var ev;
+        try { ev = new Event('submit', { bubbles: true, cancelable: true }); }
+        catch (e2) { ev = document.createEvent('Event'); ev.initEvent('submit', true, true); }
+        form.dispatchEvent(ev);
+      });
+    }
 
     senkron(false);
     durumGuncelle();
@@ -543,6 +996,9 @@
 
   window.MansetEditor = {
     baglat: baglat,
-    temizle: htmlTemizle
+    temizle: htmlTemizle,
+    // Ölçülebilirlik: aşama 1 saf dize işlemidir, DOM'suz sınanabilir
+    // (tests/unit/… karşılığı yok; node ile doğrudan çağrılır).
+    yapistirmaOnTemizlik: yapistirmaOnTemizlik
   };
 })();

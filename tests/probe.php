@@ -16,6 +16,8 @@
  *   php tests/probe.php <kök> srcset_gate
  *   php tests/probe.php <kök> dup_api
  *   php tests/probe.php <kök> backup_secret
+ *   php tests/probe.php <kök> mysql_ping
+ *   php tests/probe.php <kök> paywall_leak
  *
  * NEDEN AYRI BETİK: kabuktan `php -r` ile kod göndermek Git Bash'te kırılgan —
  * MSYS yol dönüşümü yalnız ARGÜMAN konumundaki yolları çevirir, kod dizesinin
@@ -245,6 +247,76 @@ switch ($soru) {
         // anahtar "korumalı" değil, kayıptır.
         settings_all(true);
         echo (setting('ai_api_key') === $sir) ? 'TAMAM' : 'COZULEMEDI';
+        break;
+
+    case 'mysql_ping':
+        // MySQL sunucusuna ERKEN bağlanma denemesi (e2e --driver=mysql).
+        //
+        // NEDEN SONDA: bağlantı bilgisi ortam değişkenlerinden gelir ve kabuktan
+        // `php -r` ile gömülü yol/parola göndermek Git Bash'te kırılgandır
+        // (bkz. bu dosyanın başlığı). Ayrıca parola komut satırında geçseydi
+        // `ps` çıktısında görünürdü.
+        $h = getenv('MANSET_DB_HOST') ?: '127.0.0.1';
+        $pt = (int)(getenv('MANSET_DB_PORT') ?: 3306);
+        $d = getenv('MANSET_DB_NAME') ?: 'manset_test';
+        $u = getenv('MANSET_DB_USER') ?: 'root';
+        $w = getenv('MANSET_DB_PASS');
+        if ($w === false) { $w = ''; }
+        if (!extension_loaded('pdo_mysql')) { echo 'HATA: pdo_mysql eklentisi yok'; break; }
+        try {
+            new PDO('mysql:host=' . $h . ';port=' . $pt . ';dbname=' . $d . ';charset=utf8mb4', $u, $w,
+                    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_TIMEOUT => 5]);
+            echo 'TAMAM';
+        } catch (Throwable $e) {
+            // Parola mesaja SIZMAMALI: sürücü bazen bağlantı dizesini yankılar.
+            $m = str_replace([$w === '' ? chr(0) : $w], ['***'], $e->getMessage());
+            echo 'HATA: ' . $m;
+        }
+        break;
+
+    case 'paywall_leak':
+        // KİLİTLİ GÖVDE HANGİ YOLLARDAN SIZIYOR?
+        //
+        // Bu sınıf İKİ KEZ tekrarladı: tur 2'de beslemelerden, tur 5'te arama
+        // ucundan (`search.query` gövde alıntısı anonime dönüyordu ve arama terimi
+        // kaydırılarak metin yürüyerek çıkarılabiliyordu). Her yeni "içerikten
+        // parça göster" özelliği bu kapıyı yeniden açma riski taşır.
+        //
+        // Sonda ÇALIŞTIRIR: kilitli bir haber uydurur, gövdesine benzersiz bir
+        // damga koyar ve metin üreten yolları anonim olarak çağırır.
+        require_once $root . '/inc/view.php';
+        if (function_exists('manset_load_feature_modules')) { manset_load_feature_modules(); }
+        require_once $root . '/inc/roles.php';
+
+        $damga = 'PAYWALLSIZINTI' . bin2hex(random_bytes(4));
+        $pid = (int)qv('SELECT id FROM posts WHERE status = \'published\' ORDER BY id LIMIT 1', [], 0);
+        if ($pid <= 0) { echo 'HABER_YOK'; break; }
+
+        $yedek = q1('SELECT visibility, teaser, body FROM posts WHERE id = :i', [':i' => $pid]);
+        q('UPDATE posts SET visibility = \'premium\', teaser = \'Onizleme.\', body = :b WHERE id = :i',
+          [':b' => '<p>' . $damga . ' abonelere ozel.</p>', ':i' => $pid]);
+
+        $sizinti = [];
+        // 1) Arama süsleme yolu (1.3-06)
+        if (function_exists('search_decorate_items')) {
+            $rows = qa('SELECT ' . post_select_columns() . ' FROM posts p WHERE p.id = :i', [':i' => $pid]);
+            $d = search_decorate_items($rows, [strtolower($damga)]);
+            foreach ((array)$d as $r) {
+                if (strpos((string)arr($r, 'search_excerpt_html', ''), $damga) !== false) { $sizinti[] = 'search'; }
+            }
+        }
+        // 2) Gövde oluşturma yolu (tema ve besleme buradan geçer)
+        if (function_exists('post_body_html')) {
+            $p = q1('SELECT * FROM posts WHERE id = :i', [':i' => $pid]);
+            if (strpos((string)post_body_html($p), $damga) !== false) { $sizinti[] = 'body'; }
+        }
+
+        // Haberi geri al
+        q('UPDATE posts SET visibility = :v, teaser = :t, body = :b WHERE id = :i',
+          [':v' => (string)arr($yedek, 'visibility', 'public'), ':t' => (string)arr($yedek, 'teaser', ''),
+           ':b' => (string)arr($yedek, 'body', ''), ':i' => $pid]);
+
+        echo implode(',', array_unique($sizinti));
         break;
 
     default:

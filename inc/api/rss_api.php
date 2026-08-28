@@ -168,11 +168,14 @@ api_register('rss.fetch_now', function () {
             'yeni' => 0, 'toplam' => 0,
         ]);
     }
+    $tekrar = (int)arr($r, 'tekrar', 0);
     return [
         'yeni'    => (int)$r['yeni'],
+        'tekrar'  => $tekrar,
         'toplam'  => (int)$r['toplam'],
         'error'   => '',
-        'message' => $r['toplam'] . ' öge okundu, ' . $r['yeni'] . ' yeni öge havuza eklendi.',
+        'message' => $r['toplam'] . ' öge okundu, ' . $r['yeni'] . ' yeni öge havuza eklendi.'
+                   . ($tekrar > 0 ? ' ' . $tekrar . ' öge başka kaynakta zaten vardı, tekrar olarak işaretlendi.' : ''),
     ];
 }, rss_api_opts());
 
@@ -182,6 +185,7 @@ api_register('rss.pool', function () {
         'source_id' => (int)rss_api_field('source_id', 0),
         'status'    => (string)rss_api_field('status', ''),
         'q'         => (string)rss_api_field('q', ''),
+        'dup'       => (int)rss_api_field('dup', 0) ? 1 : 0,
     ];
     $page = max(1, (int)rss_api_field('page', 1));
     $perPage = 30;
@@ -201,6 +205,7 @@ api_register('rss.pool', function () {
             'published_at' => (string)($r['published_at'] ?? ''),
             'fetched_at'   => (string)($r['fetched_at'] ?? ''),
             'status'       => (string)$r['status'],
+            'dup_of'       => (int)($r['dup_of'] ?? 0),
         ];
     }
     return [
@@ -208,6 +213,60 @@ api_register('rss.pool', function () {
         'total'   => $total,
         'page'    => $page,
         'message' => $total . ' öge bulundu.',
+    ];
+}, rss_api_opts());
+
+// ---------------------------------------------------------------- rss.item_preview
+/*
+ * HAVUZDA GÖVDE ÖNİZLEME (1.3-05).
+ * Editör bugün havuzda yalnız başlığı ve 110 karakterlik özeti görüyor; "Taslak
+ * yap" dedikten sonra metnin gerçekte ne olduğunu öğreniyor. Beslemeden gelen
+ * gövdenin yarısı reklam kutusu ya da tek satırlık teaser olabilir. Önizleme,
+ * içeri almadan önce metni gösterir.
+ *
+ * Gövde `sanitize_html($body, false)` ile ikinci kez süzülür: veritabanındaki
+ * kayıt zaten süzülmüştü ama önizleme panelde HAM basılacak; ikinci süzgeç,
+ * eski (1.0) kayıtların da aynı beyaz listeden geçmesini garanti eder.
+ */
+api_register('rss.item_preview', function () {
+    $id = (int)rss_api_field('id', 0);
+    if ($id <= 0) { return json_err('Geçersiz öge.'); }
+    $it = q1('SELECT i.*, s.name AS source_name FROM rss_items i
+              LEFT JOIN rss_sources s ON s.id = i.source_id WHERE i.id = :i', [':i' => $id]);
+    if (!$it) { return json_err('Öge bulunamadı.', 404); }
+
+    $body = sanitize_html((string)$it['content'], false);
+    if (trim(strip_tags($body)) === '') {
+        $sum = (string)$it['summary'];
+        $body = $sum !== '' ? '<p>' . esc($sum) . '</p>' : '';
+    }
+
+    $dupOf = (int)($it['dup_of'] ?? 0);
+    $dupTitle = '';
+    $dupSource = '';
+    if ($dupOf > 0) {
+        $d = q1('SELECT i.title, s.name AS source_name FROM rss_items i
+                 LEFT JOIN rss_sources s ON s.id = i.source_id WHERE i.id = :i', [':i' => $dupOf]);
+        if ($d) {
+            $dupTitle = (string)$d['title'];
+            $dupSource = (string)($d['source_name'] ?? '');
+        }
+    }
+
+    return [
+        'id'          => $id,
+        'title'       => (string)$it['title'],
+        'link'        => (string)$it['link'],
+        'image'       => (string)$it['image'],
+        'source_name' => (string)($it['source_name'] ?? ''),
+        'published_at' => (string)($it['published_at'] ?? ''),
+        'status'      => (string)$it['status'],
+        'body'        => $body,
+        'chars'       => mb_strlen(trim(strip_tags($body)), 'UTF-8'),
+        'dup_of'      => $dupOf,
+        'dup_title'   => $dupTitle,
+        'dup_source'  => $dupSource,
+        'message'     => 'Önizleme hazır.',
     ];
 }, rss_api_opts());
 

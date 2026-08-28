@@ -662,6 +662,453 @@ function rss_guid_hash(array $item, $sourceId) {
     return sha1($seed);
 }
 
+// ============================================== çapraz kaynak tekrar tespiti (1.3-05)
+
+/**
+ * NEDEN GEREKLİ
+ * -------------
+ * `guid_hash` mükerrer engeli KAYNAK BAŞINADIR. Aynı haber iki ajanstan gelince
+ * iki ayrı karma üretir ve ikisi de havuza girer; otomatik yayın açıksa site aynı
+ * haberi iki kez yayımlar.
+ *
+ * TEMEL KARAR — TESPİT SİLMEZ, İŞARETLER
+ * Yanlış pozitif (aslında farklı olan iki haberi aynı sayma) bu işin en pahalı
+ * hatasıdır: bir haber okura HİÇ ulaşmaz ve kimse fark etmez. Bu yüzden ikinci
+ * öge havuza YAZILIR; yalnız `status = 'skipped'` ve `dup_of = <ilk ögenin id>`
+ * olur. Otomatik yayın onu almaz, editör havuzda "tekrar" rozetiyle görür ve
+ * yanlışsa tek tıkla taslak yapar. Yani yanlış pozitifin bedeli bir tıktır,
+ * kayıp haber değildir.
+ *
+ * ÜÇ AYAK (ucuzdan pahalıya)
+ *   1. Bağlantı: izleme kuyruğu atılmış adresin sha1'i (`link_hash`). Kaynaklar
+ *      aynı habere aynı adresi farklı utm_* kuyruklarıyla verir.
+ *   2. Başlık (tam): normalleştirilmiş başlığın sha1'i (`title_key`).
+ *   3. Başlık (benzerlik): sözcük kümesi üzerinde Dice katsayısı. Yalnız 1 ve 2
+ *      tutmadığında, yalnız pencere içindeki ögelerde çalışır.
+ *
+ * AYNI KAYNAK KARŞILAŞTIRILMAZ. Bir ajansın kendi beslemesindeki benzer başlıklar
+ * çoğunlukla güncellemedir ("... son dakika", "... güncellendi"); onları elemek
+ * gelişen haberi kesmek olurdu. Kaynak içi mükerrer zaten `guid_hash` işidir.
+ */
+
+/** Tekrar tespiti sütunları (göç 027) var mı? */
+function rss_has_dedupe_columns() {
+    static $var = null;
+    if ($var === null) {
+        $var = function_exists('schema_has_column')
+            && schema_has_column('rss_items', 'link_hash')
+            && schema_has_column('rss_items', 'title_key')
+            && schema_has_column('rss_items', 'dup_of');
+    }
+    return $var;
+}
+
+/** Tekrar tespiti açık mı? (varsayılan AÇIK — mükerrer haber görünür bir kusurdur) */
+function rss_dedupe_enabled() {
+    return rss_has_dedupe_columns() && setting('rss_dedupe', '1') === '1';
+}
+
+/** Başlık benzerlik eşiği (%). 50–100 arasına kırpılır. */
+function rss_dedupe_threshold() {
+    $v = (int)setting('rss_dedupe_threshold', '82');
+    return max(50, min(100, $v));
+}
+
+/** Karşılaştırma penceresi (saat). Bu kadar eski ögelerle karşılaştırılmaz. */
+function rss_dedupe_window_hours() {
+    $v = (int)setting('rss_dedupe_window_hours', '48');
+    return max(1, min(720, $v));
+}
+
+/** Pencere içinde en çok kaç ögeyle karşılaştırılır (yavaş beslemede tavan). */
+function rss_dedupe_max_candidates() { return 400; }
+
+/** Adresten atılan izleme parametreleri (ön ek eşleşmesi de var: 'utm_'). */
+function rss_tracking_params() {
+    return ['fbclid', 'gclid', 'dclid', 'msclkid', 'yclid', 'igshid', 'mc_cid', 'mc_eid',
+            'ref', 'ref_src', 'referrer', 'source', 'spm', 'cmpid', 'campaign_id',
+            '_ga', '_gl', 'wt_mc', 'sr_share', 'ncid', 'partner'];
+}
+
+/**
+ * Bağlantıyı karşılaştırılabilir biçime getirir.
+ * · şema ve ana ad küçük harfe iner, 'www.' atılır, varsayılan port atılır
+ * · http/https ayrımı yok sayılır (aynı haber iki şemayla verilebiliyor)
+ * · izleme parametreleri (utm_*, fbclid…) atılır, kalanlar ada göre sıralanır
+ * · çapa (#...) atılır, sondaki '/' atılır
+ * Adres ayrıştırılamazsa kırpılmış ham metin döner (yine de karşılaştırılabilir).
+ */
+function rss_normalize_link($url) {
+    $url = trim((string)$url);
+    if ($url === '') { return ''; }
+    $p = @parse_url($url);
+    if (!$p || empty($p['host'])) { return mb_strtolower($url, 'UTF-8'); }
+
+    $host = strtolower($p['host']);
+    if (strncmp($host, 'www.', 4) === 0) { $host = substr($host, 4); }
+
+    $path = isset($p['path']) ? (string)$p['path'] : '/';
+    $path = preg_replace('#/+#', '/', $path);
+    if ($path !== '/' ) { $path = rtrim($path, '/'); }
+    if ($path === '') { $path = '/'; }
+
+    $qs = '';
+    if (!empty($p['query'])) {
+        $pairs = [];
+        foreach (explode('&', (string)$p['query']) as $chunk) {
+            if ($chunk === '') { continue; }
+            $eq = strpos($chunk, '=');
+            $k = $eq === false ? $chunk : substr($chunk, 0, $eq);
+            $v = $eq === false ? '' : substr($chunk, $eq + 1);
+            $kl = strtolower(urldecode($k));
+            if ($kl === '' || strncmp($kl, 'utm_', 4) === 0) { continue; }
+            if (in_array($kl, rss_tracking_params(), true)) { continue; }
+            $pairs[] = $kl . '=' . $v;
+        }
+        sort($pairs);
+        if ($pairs) { $qs = '?' . implode('&', $pairs); }
+    }
+    // Şema kasten dışarıda: aynı haber bir kaynakta http, ötekinde https olabilir.
+    return $host . $path . $qs;
+}
+
+/** Normalleştirilmiş adresin karması. Adres yoksa ''. */
+function rss_link_hash($url) {
+    $n = rss_normalize_link($url);
+    return $n === '' ? '' : sha1($n);
+}
+
+/**
+ * Başlığı karşılaştırılabilir biçime getirir.
+ * Türkçe harfler ASCII karşılığına indirgenir (kaynaklar aynı başlığı farklı
+ * yazıyor: "İSTANBUL" / "Istanbul" / "istanbul"), noktalama atılır, boşluk teke iner.
+ */
+function rss_normalize_title($title) {
+    $t = (string)$title;
+    $t = rss_decode_entities($t);
+    $map = ['İ' => 'i', 'I' => 'i', 'ı' => 'i', 'Ş' => 's', 'ş' => 's', 'Ğ' => 'g', 'ğ' => 'g',
+            'Ü' => 'u', 'ü' => 'u', 'Ö' => 'o', 'ö' => 'o', 'Ç' => 'c', 'ç' => 'c',
+            'Â' => 'a', 'â' => 'a', 'Î' => 'i', 'î' => 'i', 'Û' => 'u', 'û' => 'u'];
+    $t = strtr($t, $map);
+    $t = mb_strtolower($t, 'UTF-8');
+    $t = preg_replace('/[^\p{L}\p{N}]+/u', ' ', $t);
+    return trim(preg_replace('/\s+/u', ' ', (string)$t));
+}
+
+/** Normalleştirilmiş başlığın karması (tam eşleşme hızlı yolu). */
+function rss_title_key($title) {
+    $n = rss_normalize_title($title);
+    return $n === '' ? '' : sha1($n);
+}
+
+/** Başlık sözcükleri (2 harften kısa parçalar atılır — "de", "bir" gürültüsü). */
+function rss_title_tokens($title) {
+    $n = rss_normalize_title($title);
+    if ($n === '') { return []; }
+    $out = [];
+    foreach (explode(' ', $n) as $w) {
+        if (mb_strlen($w, 'UTF-8') < 3) { continue; }
+        $out[$w] = true;
+    }
+    return array_keys($out);
+}
+
+/**
+ * İki başlığın benzerliği (%), sözcük kümesi üzerinde Dice katsayısı:
+ *   2 · |A ∩ B| / (|A| + |B|)
+ *
+ * NEDEN Dice, neden `similar_text` DEĞİL: `similar_text` karakter dizisi
+ * hizalaması yapar; "Ankara'da patlama" ile "Ankara'da yangın" gibi ortak ön eki
+ * uzun ama olayı FARKLI iki başlığa yüksek puan verir. Sözcük kümesi ise olayı
+ * ayıran sözcüğü (patlama/yangın) doğrudan eksik sayar. Ayrıca sözcük sırası
+ * değişse de ("Patlama: Ankara" / "Ankara'da patlama") puan düşmez — kaynaklar
+ * aynı haberi farklı sırayla yazar.
+ *
+ * KISA BAŞLIK KAPISI: her iki başlıkta da 4'ten az anlamlı sözcük varsa
+ * benzerlik hesabı YAPILMAZ (0 döner). "Deprem" ile "Deprem" %100 benzerdir ama
+ * farklı iki depremdir. Kısa başlıklar yalnız bağlantı ya da tam başlık
+ * eşleşmesiyle elenebilir.
+ */
+function rss_title_similarity($a, $b) {
+    $ta = rss_title_tokens($a);
+    $tb = rss_title_tokens($b);
+    if (!$ta || !$tb) { return 0; }
+    if (count($ta) < 4 || count($tb) < 4) { return 0; }
+
+    $tekli = rss_dice($ta, $tb);
+    if ($tekli === 0) { return 0; }
+
+    // SIRA CEZASI — ölçümle eklendi (birim testi bunu yakaladı).
+    // Yalnız sözcük kümesine bakan bir ölçüt, ÖZNE İLE NESNESİ YER DEĞİŞTİRMİŞ
+    // iki başlığı %100 aynı sayıyordu:
+    //   "Galatasaray Fenerbahçe maçını kazandı" / "Fenerbahçe Galatasaray maçını kazandı"
+    // İkisi aynı sözcükleri taşır ama TERS haberi anlatır. Komşu sözcük
+    // ikilileri (bigram) sırayı da ölçer; bu çiftte ikili örtüşmesi %33'e düşer.
+    // Ağırlık 2:1 — sıra ikincil bir kanıttır, kaynaklar başlığı yeniden yazar.
+    $ikili = rss_dice(rss_title_bigrams($ta), rss_title_bigrams($tb));
+    $puan = (int)round((2 * $tekli + $ikili) / 3);
+
+    /*
+     * BAŞI DEĞİŞMİŞ BAŞLIK KAPISI (ölçümle eklendi).
+     * Uzun bir başlıkta yalnız ilk iki özne yer değiştirdiğinde ikili örtüşmesi
+     * de yüksek kalıyor ve puan eşiği geçiyordu (ölçüm: %87):
+     *   "Galatasaray Fenerbahçe maçını kazandı ve lider oldu"
+     *   "Fenerbahçe Galatasaray maçını kazandı ve lider oldu"
+     * Aynı sözcükler, TERS haber. Başlıklar özneyle başlar; iki başlığın ilk
+     * anlamlı sözcüğü FARKLI ama her biri ötekinin içinde geçiyorsa, elimizde
+     * yer değiştirmiş özneler var demektir. Böyle bir çiftte puan, sırayı ölçen
+     * ikili bileşenine indirilir.
+     *
+     * BEDELİ bilinçli: başlığı baştan kuran gerçek bir tekrar (özne sonra
+     * yazılmış) bu kapıdan geçemez ve elenmez — yani yanlış NEGATİF üretir.
+     * İki hata arasında tercihimiz budur: elenmeyen tekrar editörün gördüğü bir
+     * fazlalıktır; yanlış elenen haber ise kimsenin görmediği bir eksiktir.
+     */
+    if ($ta[0] !== $tb[0] && in_array($ta[0], $tb, true) && in_array($tb[0], $ta, true)) {
+        $puan = min($puan, $ikili);
+    }
+    return $puan;
+}
+
+/** İki küme arasında Dice katsayısı (%). */
+function rss_dice(array $a, array $b) {
+    if (!$a || !$b) { return 0; }
+    $ortak = count(array_intersect($a, $b));
+    if ($ortak === 0) { return 0; }
+    return (int)round(200 * $ortak / (count($a) + count($b)));
+}
+
+/** Komşu sözcük ikilileri ("ankara metro" → ["ankara metro"]). */
+function rss_title_bigrams(array $tokens) {
+    $out = [];
+    $n = count($tokens);
+    for ($i = 0; $i + 1 < $n; $i++) { $out[$tokens[$i] . ' ' . $tokens[$i + 1]] = true; }
+    return array_keys($out);
+}
+
+/**
+ * Ögenin havuzdaki bir kopyası var mı?
+ *
+ * @return array|null ['id'=>int,'reason'=>string,'score'=>int,'title'=>string]
+ */
+function rss_find_duplicate(array $item, $sourceId) {
+    if (!rss_dedupe_enabled()) { return null; }
+
+    $sourceId = (int)$sourceId;
+    $since = date('Y-m-d H:i:s', time() - rss_dedupe_window_hours() * 3600);
+
+    // 1) Bağlantı — en güçlü kanıt, tek sorgu.
+    $lh = rss_link_hash((string)arr($item, 'link', ''));
+    if ($lh !== '') {
+        $row = q1('SELECT id, title FROM rss_items
+                   WHERE link_hash = :h AND source_id <> :s AND dup_of = 0 AND fetched_at >= :d
+                   ORDER BY id ASC LIMIT 1',
+            [':h' => $lh, ':s' => $sourceId, ':d' => $since]);
+        if ($row) {
+            return ['id' => (int)$row['id'], 'reason' => 'baglanti', 'score' => 100,
+                    'title' => (string)$row['title']];
+        }
+    }
+
+    // 2) Başlık (tam eşleşme) — ikinci tek sorgu.
+    $tk = rss_title_key((string)arr($item, 'title', ''));
+    if ($tk !== '') {
+        $row = q1('SELECT id, title FROM rss_items
+                   WHERE title_key = :k AND source_id <> :s AND dup_of = 0 AND fetched_at >= :d
+                   ORDER BY id ASC LIMIT 1',
+            [':k' => $tk, ':s' => $sourceId, ':d' => $since]);
+        if ($row) {
+            return ['id' => (int)$row['id'], 'reason' => 'baslik-ayni', 'score' => 100,
+                    'title' => (string)$row['title']];
+        }
+    }
+
+    // 3) Başlık (benzerlik) — pencere taranır.
+    $title = (string)arr($item, 'title', '');
+    if (rss_title_tokens($title) === [] ) { return null; }
+    $esik = rss_dedupe_threshold();
+    $rows = qa('SELECT id, title FROM rss_items
+                WHERE source_id <> :s AND dup_of = 0 AND fetched_at >= :d
+                ORDER BY id DESC LIMIT ' . rss_dedupe_max_candidates(),
+        [':s' => $sourceId, ':d' => $since]);
+    $best = null;
+    foreach ($rows as $r) {
+        $p = rss_title_similarity($title, (string)$r['title']);
+        if ($p < $esik) { continue; }
+        if ($best === null || $p > $best['score']) {
+            $best = ['id' => (int)$r['id'], 'reason' => 'baslik-benzer', 'score' => $p,
+                     'title' => (string)$r['title']];
+        }
+        if ($p === 100) { break; }
+    }
+    return $best;
+}
+
+// ============================================== uzak görsel içe aktarma (1.3-05)
+
+/** Görsel içe aktarma açık mı? (varsayılan KAPALI — disk ve telif kararı yayıncınındır) */
+function rss_image_import_enabled() {
+    return setting('rss_image_import', '0') === '1' && function_exists('media_import_file');
+}
+
+/** İndirilecek görselin bayt tavanı. */
+function rss_image_max_bytes() {
+    $kb = (int)setting('rss_image_max_kb', '2048');
+    $kb = max(64, min(10240, $kb));
+    return $kb * 1024;
+}
+
+/** Kabul edilen görsel türleri. SVG YOK: içinde betik taşır. */
+function rss_image_mimes() {
+    return ['image/jpeg' => 'jpg', 'image/pjpeg' => 'jpg', 'image/png' => 'png',
+            'image/gif' => 'gif', 'image/webp' => 'webp', 'image/avif' => 'avif'];
+}
+
+/**
+ * Uzak bir görseli indirir — SSRF kalkanından geçerek.
+ *
+ * KALKAN YENİDEN YAZILMADI: adres `rss_guard_target()` (üretimde
+ * `safe_remote_target()`, inc/sanitize.php) ile doğrulanır, çözülen IP curl'e
+ * sabitlenir (DNS rebinding), yönlendirme takibi KAPALIDIR ve her yönlendirme
+ * elle yeniden doğrulanır — beslemenin indirilmesindeki kapının aynısı.
+ *
+ * @return array ['ok'=>bool,'body'=>string,'mime'=>string,'error'=>string]
+ */
+function rss_http_get_image($url) {
+    $out = ['ok' => false, 'body' => '', 'mime' => '', 'error' => ''];
+    $max = rss_image_max_bytes();
+    $target = (string)$url;
+
+    for ($hop = 0; $hop <= RSS_MAX_REDIRECTS; $hop++) {
+        $safeT = rss_guard_target($target);
+        if ($safeT === false) { $out['error'] = rss_rejected_message(); return $out; }
+        $safe = $safeT['url'];
+
+        if (!function_exists('curl_init')) { $out['error'] = 'Görsel indirmek için curl gerekli.'; return $out; }
+
+        $body = '';
+        $tooBig = false;
+        $location = '';
+        $ch = curl_init();
+        $opts = [
+            CURLOPT_URL            => $safe,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_MAXREDIRS      => 0,
+            CURLOPT_CONNECTTIMEOUT => RSS_CONNECT_TIMEOUT,
+            CURLOPT_TIMEOUT        => RSS_TOTAL_TIMEOUT,
+            CURLOPT_MAXFILESIZE    => $max,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_USERAGENT      => 'Manset/' . MANSET_VERSION . ' (+RSS görsel)',
+            CURLOPT_HTTPHEADER     => ['Accept: image/*'],
+            CURLOPT_HEADERFUNCTION => function ($c, $h) use (&$location) {
+                if (stripos($h, 'location:') === 0) { $location = trim(substr($h, 9)); }
+                return strlen($h);
+            },
+            CURLOPT_WRITEFUNCTION  => function ($c, $chunk) use (&$body, &$tooBig, $max) {
+                $len = strlen($chunk);
+                if (strlen($body) + $len > $max) { $tooBig = true; return 0; }
+                $body .= $chunk;
+                return $len;
+            },
+        ];
+        if (defined('CURLOPT_PROTOCOLS_STR')) { $opts[CURLOPT_PROTOCOLS_STR] = 'http,https'; }
+        elseif (defined('CURLPROTO_HTTP'))    { $opts[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS; }
+        curl_setopt_array($ch, $opts);
+        if (!empty($safeT['resolve'])) { curl_pin_resolved_ip($ch, $safeT); }
+
+        $ok = curl_exec($ch);
+        $errNo = curl_errno($ch);
+        $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $ctype = strtolower(trim(explode(';', (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE))[0]));
+        curl_close($ch);
+
+        if ($tooBig || $errNo === CURLE_FILESIZE_EXCEEDED) {
+            $out['error'] = 'Görsel çok büyük (' . (int)(rss_image_max_bytes() / 1024) . ' KB sınırı aşıldı).';
+            return $out;
+        }
+        if ($ok === false && $errNo !== 0) { $out['error'] = 'Görsel indirilemedi.'; return $out; }
+
+        if (in_array($status, [301, 302, 303, 307, 308], true)) {
+            $next = rss_absolute_url($location, $safe);
+            if ($next === '') { $out['error'] = 'Görsel adresi yönlendirdi ama hedef okunamadı.'; return $out; }
+            $target = $next;
+            continue;
+        }
+        if ($status !== 200) { $out['error'] = 'Görsel adresi yanıt vermedi (HTTP ' . $status . ').'; return $out; }
+        if ($body === '')    { $out['error'] = 'Görsel boş geldi.'; return $out; }
+
+        $out['ok'] = true;
+        $out['body'] = $body;
+        $out['mime'] = $ctype;
+        return $out;
+    }
+    $out['error'] = 'Çok fazla yönlendirme.';
+    return $out;
+}
+
+/**
+ * Uzak görseli indirip medya kütüphanesine alır.
+ *
+ * ÜÇ KAT DENETİM: (1) SSRF kapısı ve boyut tavanı indirme sırasında,
+ * (2) Content-Type beyaz listesi, (3) `getimagesize()` ile dosyanın GERÇEKTEN
+ * o tür olduğunun doğrulanması. Üçüncüsü olmadan sunucu "image/png" başlığıyla
+ * herhangi bir baytı gönderebilirdi.
+ *
+ * @return array ['ok'=>bool,'media_id'=>int,'filename'=>string,'url'=>string,'error'=>string]
+ */
+function rss_import_image($url, $alt = '') {
+    $out = ['ok' => false, 'media_id' => 0, 'filename' => '', 'url' => '', 'error' => ''];
+    $url = trim((string)$url);
+    if ($url === '') { $out['error'] = 'Görsel adresi boş.'; return $out; }
+    if (!function_exists('media_import_file')) { $out['error'] = 'Medya modülü kurulu değil.'; return $out; }
+
+    $r = rss_http_get_image($url);
+    if (!$r['ok']) { $out['error'] = $r['error']; return $out; }
+
+    $mimes = rss_image_mimes();
+    if (!isset($mimes[$r['mime']])) {
+        $out['error'] = 'Bu içerik türü görsel değil (' . sanitize_line($r['mime'], 60) . ').';
+        return $out;
+    }
+
+    $tmp = @tempnam(sys_get_temp_dir(), 'msrss');
+    if (!$tmp) { $out['error'] = 'Geçici dosya açılamadı.'; return $out; }
+    if (@file_put_contents($tmp, $r['body']) === false) {
+        @unlink($tmp);
+        $out['error'] = 'Geçici dosya yazılamadı.';
+        return $out;
+    }
+
+    // Gerçekten görsel mi? (başlık yalan söyleyebilir)
+    $info = @getimagesize($tmp);
+    if (!is_array($info) || empty($info[0]) || empty($info[1])) {
+        @unlink($tmp);
+        $out['error'] = 'İndirilen dosya geçerli bir görsel değil.';
+        return $out;
+    }
+
+    $ad = basename((string)parse_url($url, PHP_URL_PATH));
+    $ad = preg_replace('/[^A-Za-z0-9\.\-_]+/', '-', $ad);
+    if ($ad === '' || strpos($ad, '.') === false) { $ad = 'rss-gorsel'; }
+    $ad = preg_replace('/\.[A-Za-z0-9]+$/', '', $ad);
+    if ($ad === '') { $ad = 'rss-gorsel'; }
+    $ad = substr($ad, 0, 60) . '.' . $mimes[$r['mime']];
+
+    $res = media_import_file($tmp, $ad, (string)$alt);
+    @unlink($tmp);
+
+    if (empty($res['ok'])) {
+        $out['error'] = (string)arr($res, 'error', 'Görsel kütüphaneye alınamadı.');
+        return $out;
+    }
+    $out['ok'] = true;
+    $out['media_id'] = (int)arr($res, 'id', 0);
+    $out['filename'] = (string)arr($res, 'filename', '');
+    $out['url'] = (string)arr($res, 'url', '');
+    return $out;
+}
+
 // ================================================================ kaynak çekimi
 
 /**
@@ -674,6 +1121,7 @@ function rss_fetch_source(array $source, $dryRun = false) {
     $out = [
         'ok' => false, 'yeni' => 0, 'toplam' => 0, 'error' => '', 'ornekler' => [],
         'gorsel_var' => false, 'kaynak_adi' => '', 'yeni_idler' => [],
+        'tekrar' => 0, 'tekrar_idler' => [],
     ];
     $sourceId = (int)arr($source, 'id', 0);
     $url = trim((string)arr($source, 'url', ''));
@@ -712,24 +1160,43 @@ function rss_fetch_source(array $source, $dryRun = false) {
 
     // ---- havuz yazımı (mükerrer engeli: rss_items.guid_hash UNIQUE)
     $now = now();
+    $dedupeVar = rss_has_dedupe_columns();
     foreach ($items as $it) {
         $hash = rss_guid_hash($it, $sourceId);
         $exists = qv('SELECT id FROM rss_items WHERE guid_hash = :h', [':h' => $hash], 0);
         if ($exists) { continue; }
+
+        $alanlar = [
+            'source_id'    => $sourceId,
+            'guid_hash'    => $hash,
+            'title'        => mb_substr($it['title'], 0, 255),
+            'link'         => $it['link'],
+            'image'        => $it['image'],
+            'summary'      => $it['summary'],
+            'content'      => $it['content'],
+            'published_at' => $it['published_at'] !== '' ? $it['published_at'] : $now,
+            'fetched_at'   => $now,
+            'status'       => 'new',
+        ];
+
+        // ÇAPRAZ KAYNAK TEKRARI: öge yine de YAZILIR, yalnız 'skipped' + dup_of
+        // ile işaretlenir (gerekçe: rss_find_duplicate başlığı).
+        $dup = null;
+        if ($dedupeVar) {
+            $alanlar['link_hash'] = rss_link_hash($it['link']);
+            $alanlar['title_key'] = rss_title_key($it['title']);
+            try { $dup = rss_find_duplicate($it, $sourceId); }
+            catch (Throwable $e) { $dup = null; log_error('RSS tekrar taraması: ' . $e->getMessage(), 'kaynak=' . $sourceId); }
+            if ($dup !== null) {
+                $alanlar['status'] = 'skipped';
+                $alanlar['dup_of'] = (int)$dup['id'];
+            }
+        }
+
         try {
-            $id = db_insert('rss_items', [
-                'source_id'    => $sourceId,
-                'guid_hash'    => $hash,
-                'title'        => mb_substr($it['title'], 0, 255),
-                'link'         => $it['link'],
-                'image'        => $it['image'],
-                'summary'      => $it['summary'],
-                'content'      => $it['content'],
-                'published_at' => $it['published_at'] !== '' ? $it['published_at'] : $now,
-                'fetched_at'   => $now,
-                'status'       => 'new',
-            ]);
-            $out['yeni_idler'][] = (int)$id;
+            $id = db_insert('rss_items', $alanlar);
+            if ($dup !== null) { $out['tekrar']++; $out['tekrar_idler'][] = (int)$id; }
+            else { $out['yeni_idler'][] = (int)$id; }
         } catch (PDOException $e) {
             // Benzersizlik ihlali = yarış durumunda aynı öge; sessizce atlanır
             if (stripos($e->getMessage(), 'unique') === false && stripos($e->getMessage(), 'duplicate') === false) {
@@ -783,7 +1250,13 @@ function rss_source_mark_error($sourceId, $error) {
     ];
 
     if (rss_has_backoff_columns()) {
-        $dk = rss_backoff_minutes($count);
+        // KAYNAK BAŞINA ARALIK, geri çekilmenin ALTINA inemez.
+        // Yayıncı "bu kaynağı günde bir kez oku" dediyse, hata alındığında 5 dk
+        // sonra yeniden denemek onun ayarını çiğnemektir. İki süreden BÜYÜĞÜ alınır.
+        // Yalnız AÇIKÇA ayarlanmış aralık (0 = "tercih yok") tabanı yükseltir;
+        // varsayılan aralık merdivenin ilk basamağını kaydırmaz.
+        $aralik = (int)qv('SELECT interval_min FROM rss_sources WHERE id = :i', [':i' => $sourceId], 0);
+        $dk = max(rss_backoff_minutes($count), $aralik > 0 ? min(10080, $aralik) : 0);
         $data['next_check_at'] = date('Y-m-d H:i:s', time() + $dk * 60);
         if ($count === RSS_MAX_ERRORS) {
             log_error('RSS kaynağı beklemeye alındı (' . $count . ' hata, ' . $dk . ' dk sonra yeniden denenecek)',
@@ -818,6 +1291,12 @@ function rss_pool_where(array $filters) {
     if ($qs !== '') {
         $where[] = '(i.title LIKE :q OR i.summary LIKE :q)';
         $params[':q'] = '%' . str_replace(['%', '_'], ['\%', '\_'], $qs) . '%';
+    }
+
+    // 'tekrar' süzgeci: yalnız kopya sayılanlar (1.3-05). Editörün yanlış
+    // pozitifi tek ekranda gözden geçirebilmesi için var.
+    if (rss_has_dedupe_columns() && (int)arr($filters, 'dup', 0) === 1) {
+        $where[] = 'i.dup_of > 0';
     }
     return [$where ? ' WHERE ' . implode(' AND ', $where) : '', $params];
 }
@@ -860,6 +1339,8 @@ function rss_stats() {
         'kuyrukta'       => (int)qv('SELECT COUNT(*) FROM rss_items WHERE status = \'queued\'', [], 0),
         'bugun'          => (int)qv('SELECT COUNT(*) FROM rss_items WHERE fetched_at >= :d', [':d' => date('Y-m-d') . ' 00:00:00'], 0),
         'hatali_kaynak'  => (int)qv('SELECT COUNT(*) FROM rss_sources WHERE error_count > 0', [], 0),
+        'tekrar'         => rss_has_dedupe_columns()
+            ? (int)qv('SELECT COUNT(*) FROM rss_items WHERE dup_of > 0', [], 0) : 0,
     ];
 }
 
@@ -914,6 +1395,26 @@ function rss_item_to_draft($itemId) {
         $body .= "\n" . '<p class="kaynak">Kaynak: ' . esc($sourceName) . '</p>';
     }
 
+    /*
+     * GÖRSELİ İÇE AKTAR (1.3-05, varsayılan KAPALI).
+     * ÇEKİMDE DEĞİL, TASLAK ÜRETİMİNDE indirilir: havuza günde yüzlerce öge
+     * girer ama pek azı habere döner; her ögenin görselini indirmek diskin ve
+     * dış sunucunun boşuna yorulmasıdır. Öge habere dönüştüğü an indirilir.
+     * Başarısızlık habersizlik değildir: uzak adres alan olarak korunur (1.2
+     * davranışı) ve neden günlüğe düşer.
+     */
+    $image = (string)$item['image'];
+    $mediaId = 0;
+    if ($image !== '' && rss_image_import_enabled()) {
+        $imp = rss_import_image($image, $title);
+        if ($imp['ok']) {
+            $image = $imp['filename'];      // yerel dosya adı — post_image() göreli adı çözer
+            $mediaId = (int)$imp['media_id'];
+        } else {
+            log_error('RSS görsel içe aktarılamadı: ' . $imp['error'], 'oge=' . $itemId);
+        }
+    }
+
     $spotSource = trim((string)$item['summary']) !== '' ? (string)$item['summary'] : strip_tags($body);
     $spot = excerpt($spotSource, 300);
 
@@ -932,7 +1433,7 @@ function rss_item_to_draft($itemId) {
         'slug'         => unique_slug('posts', $title),
         'spot'         => $spot,
         'body'         => $body,
-        'image'        => (string)$item['image'],   // mutlak URL; post_image() http ile başlayanı olduğu gibi döndürür
+        'image'        => $image,   // uzak URL ya da içe aktarıldıysa yerel dosya adı
         'category_id'  => $src ? (int)$src['category_id'] : 0,
         'author_id'    => rss_default_author_id(),
         'status'       => 'draft',
@@ -955,7 +1456,11 @@ function rss_item_to_draft($itemId) {
         return $out;
     }
 
-    db_update('rss_items', ['status' => 'processed'], 'id = :id', [':id' => $itemId]);
+    $son = ['status' => 'processed'];
+    if ($mediaId > 0 && function_exists('schema_has_column') && schema_has_column('rss_items', 'media_id')) {
+        $son['media_id'] = $mediaId;
+    }
+    db_update('rss_items', $son, 'id = :id', [':id' => $itemId]);
 
     $out['ok'] = true;
     $out['post_id'] = (int)$postId;
@@ -1022,6 +1527,8 @@ function rss_cron_tick() {
     $newTotal = 0;
     $errCount = 0;
     $published = 0;
+    $publishedIds = [];
+    $dupTotal = 0;
     $kalan = 0;
 
     foreach ($sources as $s) {
@@ -1042,6 +1549,7 @@ function rss_cron_tick() {
         }
         if (!$r['ok']) { $errCount++; continue; }
         $newTotal += (int)$r['yeni'];
+        $dupTotal += (int)arr($r, 'tekrar', 0);
 
         if ((int)$s['auto_publish'] !== 1) { continue; }  // havuzda 'new' olarak bekler
 
@@ -1062,12 +1570,28 @@ function rss_cron_tick() {
             db_update('posts', ['status' => 'published', 'published_at' => now(), 'updated_at' => now()],
                 'id = :id', [':id' => (int)$d['post_id']]);
             $published++;
+            $publishedIds[] = (int)$d['post_id'];
         }
     }
 
-    if ($published > 0 && function_exists('cache_flush')) { cache_flush(); }
+    /*
+     * ÖNBELLEK (1.3-12): eskiden burada argümansız `cache_flush()` vardı — tek bir
+     * ajans haberi bütün sitenin önbelleğini siliyordu. Artık kapsamla düşülür:
+     *   · 'category' → bütün LİSTE sayfaları (anasayfa, kategori, etiket, arama).
+     *     Yeni yayımlanan haber hiçbir önbellek kaydının etiketinde GEÇMEZ
+     *     (sayfa o haber yokken üretildi), bu yüzden liste tarafında hedef
+     *     daraltılamaz; geniş düşmek zorunludur.
+     *   · 'post:<id>' → haberin kendi sayfası (varsa eski bir 404/taslak kaydı).
+     * İlgisiz haber sayfaları önbellekte KALIR — asıl kazanç budur.
+     */
+    if ($published > 0 && function_exists('cache_flush')) {
+        $kapsam = ['category'];
+        foreach ($publishedIds as $pid) { $kapsam[] = 'post:' . (int)$pid; }
+        cache_flush($kapsam);
+    }
 
     return $srcCount . ' kaynak, ' . $newTotal . ' yeni öge, ' . $errCount . ' hata'
+         . ($dupTotal > 0 ? ', ' . $dupTotal . ' tekrar işaretlendi' : '')
          . ($published > 0 ? ', ' . $published . ' yayımlandı' : '')
          . ($kalan > 0 ? ', süre doldu — ' . $kalan . ' kaynak sonraki tura kaldı' : '')
          . ($bekleyen > 0 ? ', ' . $bekleyen . ' kaynak beklemede' : '');

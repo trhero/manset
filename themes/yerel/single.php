@@ -54,8 +54,16 @@ $sureGoster = !$kilitliHaber && theme_setting('show_reading_time', '1') === '1';
 
       <div class="haber-meta">
         <?php if ($bolge !== ''): ?><span class="bolge-rozet"><?= esc($bolge) ?></span><?php endif; ?>
+        <?php /* 1.3-10: yazar adı, yazarın diğer haberlerine bağlanır.
+           discover_author_url() üye/pasif/personel olmayan hesapta ve yayında
+           haberi olmayan hesapta '' döner; o zaman eski düz metin basılır. */ ?>
         <?php if (!empty($post['author_name'])): ?>
-          <span class="yazar" itemprop="author"><?= esc($post['author_name']) ?></span>
+          <?php $yazarUrl = function_exists('discover_author_url') ? discover_author_url($post) : ''; ?>
+          <?php if ($yazarUrl !== ''): ?>
+            <a class="yazar" itemprop="author" href="<?= esc($yazarUrl) ?>"><?= esc($post['author_name']) ?></a>
+          <?php else: ?>
+            <span class="yazar" itemprop="author"><?= esc($post['author_name']) ?></span>
+          <?php endif; ?>
         <?php endif; ?>
         <time itemprop="datePublished" datetime="<?= esc($post['published_at']) ?>"><?= esc(tr_date($post['published_at'])) ?></time>
         <?php if ($guncel): ?>
@@ -131,6 +139,10 @@ $sureGoster = !$kilitliHaber && theme_setting('show_reading_time', '1') === '1';
     <?php endif; ?>
 
     <?php if ($sidebarPos === 'none') { part('ilan'); } ?>
+    <?php /* 1.3-10: ilgili haberler artık ETİKET KESİŞİMİYLE puanlanır
+       (ortak etiket çoksa daha ilgili), yeterli aday yoksa kategoriye düşer.
+       Modül kurulu değilse index.php'nin verdiği kategori listesi kalır. */ ?>
+    <?php if (function_exists('discover_related_posts')) { $related = discover_related_posts($post, 4); } ?>
 
     <?php if (!empty($related)): ?>
       <section class="blok">
@@ -146,6 +158,9 @@ $sureGoster = !$kilitliHaber && theme_setting('show_reading_time', '1') === '1';
     <?= function_exists('post_update_notes_html') ? post_update_notes_html((int)$post['id']) : '' ?>
 
     <?php part('duzeltme-haber', ['post' => $post]); ?>
+
+    <?php /* 1.3-10: önceki / sonraki haber. */ ?>
+    <?php part('haber-gezinme', ['post' => $post]); ?>
 
     <?php part('comments', ['post' => $post, 'comments' => isset($comments) ? $comments : []]); ?>
   </article>

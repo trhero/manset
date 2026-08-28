@@ -147,11 +147,15 @@ function media_gd_save($img, $absPath, $mime) {
 /**
  * Küçültülmüş varyantları üretir. GD yoksa boş dizi döner (hata değildir).
  *
- * @param string $absPath  Orijinalin mutlak yolu
- * @param string $filename UPLOAD_DIR'e göre göreli ad, örn '2026/08/foto-a1b2c3d4.jpg'
+ * @param string     $absPath  Orijinalin mutlak yolu
+ * @param string     $filename UPLOAD_DIR'e göre göreli ad, örn '2026/08/foto-a1b2c3d4.jpg'
+ * @param array|null $only     YALNIZ bu varyant anahtarları üretilsin (['thumb'] gibi).
+ *                             null = hepsi. 1.3-08: yükleme isteği yalnız 'thumb'
+ *                             üretir, kalanı cron kuyruğunda üretilir.
+ * @param bool       $withWebp Ek WebP kopyası da üretilsin mi? (yüklemede false)
  * @return array ['thumb'=>'…-thumb.jpg', 'medium'=>…, 'large'=>…, 'webp'=>['thumb'=>'…-thumb.webp', …]]
  */
-function media_make_variants($absPath, $filename) {
+function media_make_variants($absPath, $filename, $only = null, $withWebp = true) {
     $out = [];
     if (!media_gd_available() || !is_file($absPath)) { return $out; }
 
@@ -175,9 +179,11 @@ function media_make_variants($absPath, $filename) {
     $ext = strtolower(substr($filename, $dot)); // '.jpg'
 
     $webp = [];
-    $canWebp = function_exists('imagewebp');
+    $canWebp = $withWebp && function_exists('imagewebp');
+    $sadece = is_array($only) ? $only : null;
 
     foreach (media_variant_widths() as $key => $targetW) {
+        if ($sadece !== null && !in_array($key, $sadece, true)) { continue; }
         if ($srcW <= $targetW) { continue; } // yalnız küçültme
         $w = $targetW;
         $h = max(1, (int)round($srcH * ($targetW / $srcW)));
@@ -332,11 +338,21 @@ function media_save_upload(array $file, $alt = '') {
         return $fail('Kayıt sonrası yol doğrulaması başarısız.');
     }
 
-    // --- 8) Varyantlar (GD yoksa boş kalır, hata değildir)
-    $variants = media_make_variants($abs, $rel);
+    /* --- 8) Varyantlar — 1.3-08: YÜKLEMEDE YALNIZ KÜÇÜK ÖNİZLEME
+     *
+     * Eskiden burada altı iş birden yapılıyordu (thumb/medium/large + üç WebP).
+     * 4000×3000 bir fotoğrafta bu, yükleme isteğini saniyelerce tutuyor ve
+     * paylaşımlı hostingin `max_execution_time` sınırında yükleme başarısız
+     * görünürken dosya diske yazılmış oluyordu. Artık istek içinde yalnız
+     * `thumb` üretilir (panelin ızgarası onu kullanır), kalanı kuyruğa girer.
+     *
+     * KIRIK GÖRSEL RİSKİ YOK: ön yüzdeki `media_variant_file()` (inc/view.php)
+     * dosyanın diskte OLUP OLMADIĞINA bakar; yoksa `post_image()` özgün
+     * dosyaya düşer. Kuyruk işlenene kadar görsel büyük gelir, ama gelir. */
+    $variants = media_make_variants($abs, $rel, ['thumb'], false);
 
     // --- 9) Veritabanı
-    $id = db_insert('media', [
+    $row = [
         'filename'   => $rel,
         'alt'        => sanitize_line((string)$alt, 255),
         'mime'       => $mime,
@@ -345,7 +361,16 @@ function media_save_upload(array $file, $alt = '') {
         'size'       => $size,
         'variants'   => $variants ? (string)json_encode($variants, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '',
         'created_at' => now(),
-    ]);
+    ];
+    // Göç 025 uygulanmamış eski kurulumda sütunlar yoktur; INSERT patlamasın.
+    if (media_has_queue()) {
+        $row['variant_state'] = media_gd_available() ? 'queued' : 'skipped';
+        $row['variant_at'] = '';
+        $row['variant_tries'] = 0;
+        $row['focus_x'] = 50;
+        $row['focus_y'] = 50;
+    }
+    $id = db_insert('media', $row);
 
     return [
         'ok'       => true,
@@ -372,6 +397,30 @@ function media_import_file($absTempPath, $originalName, $alt = '') {
 
 // ============================================================ listeleme
 
+/**
+ * Göç 025 uygulandı mı? (varyant kuyruğu + odak noktası sütunları)
+ * İstek boyunca bir kez sorulur; sorgular buna göre sütun listesi seçer.
+ */
+function media_has_queue() {
+    static $var = null;
+    if ($var !== null) { return $var; }
+    if (function_exists('schema_has_column')) {
+        $var = schema_has_column('media', 'variant_state') && schema_has_column('media', 'focus_x');
+    } else {
+        try { qv('SELECT variant_state FROM media LIMIT 1'); $var = true; }
+        catch (Throwable $e) { $var = false; }
+    }
+    return $var;
+}
+
+/** Listeleme sorgularının sütun listesi (göç 025 uygulanmışsa yeni alanlarla). */
+function media_select_columns() {
+    $base = 'id, filename, alt, mime, width, height, size, variants, created_at';
+    return media_has_queue()
+        ? $base . ', variant_state, variant_at, variant_tries, focus_x, focus_y'
+        : $base;
+}
+
 /** Satırı arayüz için zenginleştirir (url, thumb, çözülmüş varyantlar). */
 function media_decorate(array $row) {
     $v = [];
@@ -388,7 +437,62 @@ function media_decorate(array $row) {
     }
     $row['thumb'] = $thumb !== '' ? url_upload($thumb) : $row['url'];
     $row['size_text'] = media_human_size((int)arr($row, 'size', 0));
+
+    // 1.3-08 alanları — göç 025 yoksa güvenli varsayılan.
+    $durum = (string)arr($row, 'variant_state', '');
+    $row['variant_state'] = $durum;
+    $row['variant_ready'] = ($durum === 'done' || $durum === 'skipped'
+        || (isset($v['medium']) || isset($v['large'])));
+    $row['variant_label'] = media_variant_state_label($durum, $v);
+    $row['focus_x'] = media_focus_clamp(arr($row, 'focus_x', 50));
+    $row['focus_y'] = media_focus_clamp(arr($row, 'focus_y', 50));
+    $row['focus_css'] = $row['focus_x'] . '% ' . $row['focus_y'] . '%';
+    $row['alt_missing'] = (trim((string)arr($row, 'alt', '')) === '');
     return $row;
+}
+
+/** Odak yüzdesini 0..100 aralığına sıkıştırır (varsayılan 50 = merkez). */
+function media_focus_clamp($v) {
+    if ($v === null || $v === '') { return 50; }
+    return max(0, min(100, (int)$v));
+}
+
+/** Varyant durumunun panelde gösterilecek kısa karşılığı. */
+function media_variant_state_label($state, array $variants) {
+    switch ((string)$state) {
+        case 'queued':  return 'kuyrukta';
+        case 'done':    return $variants ? 'türevli' : 'türev gerekmedi';
+        case 'failed':  return 'üretilemedi';
+        case 'skipped': return 'atlandı';
+    }
+    return $variants ? 'türevli' : '—';
+}
+
+/**
+ * Odak noktasının CSS karşılığı: 'object-position: 50% 30%'.
+ * Temalar kırpılan (object-fit:cover) görsellerde bunu kullanmalıdır.
+ * @param array|int $media media satırı ya da media.id
+ */
+function media_focus_css($media) {
+    if (!is_array($media)) {
+        $media = q1('SELECT ' . media_select_columns() . ' FROM media WHERE id = :i', [':i' => (int)$media]);
+        if (!$media) { return 'object-position: 50% 50%'; }
+    }
+    return 'object-position: ' . media_focus_clamp(arr($media, 'focus_x', 50)) . '% '
+        . media_focus_clamp(arr($media, 'focus_y', 50)) . '%';
+}
+
+/** Odak noktasını kaydeder. */
+function media_set_focus($id, $x, $y) {
+    $id = (int)$id;
+    if (!media_has_queue()) { return ['ok' => false, 'error' => 'Odak noktası için 025 numaralı güncelleme gerekiyor.']; }
+    if (!qv('SELECT 1 FROM media WHERE id = :i', [':i' => $id])) {
+        return ['ok' => false, 'error' => 'Kayıt bulunamadı.'];
+    }
+    $fx = media_focus_clamp($x);
+    $fy = media_focus_clamp($y);
+    db_update('media', ['focus_x' => $fx, 'focus_y' => $fy], 'id = :id', [':id' => $id]);
+    return ['ok' => true, 'error' => '', 'focus_x' => $fx, 'focus_y' => $fy];
 }
 
 /** Arama teriminden LIKE joker karakterlerini ayıklar. */
@@ -397,18 +501,36 @@ function media_like_term($q) {
     return str_replace(['%', '_'], ' ', $q);
 }
 
-/** Medya listesi (yeniden eskiye). */
-function media_list($q = '', $limit = 60, $offset = 0) {
-    $limit = max(1, min(200, (int)$limit));
-    $offset = max(0, (int)$offset);
+/**
+ * Liste/say sorgularının ortak WHERE'i.
+ * @param string $q      Arama terimi
+ * @param string $filter '' | 'noalt' (alt metni boş) | 'queued' (varyant bekleyen)
+ * @return array [' WHERE …' ya da '', bağ dizisi]
+ */
+function media_where($q = '', $filter = '') {
     $term = media_like_term($q);
-    $where = '';
+    $kos = [];
     $p = [];
     if ($term !== '') {
-        $where = ' WHERE (filename LIKE :q OR alt LIKE :q)';
+        $kos[] = '(filename LIKE :q OR alt LIKE :q)';
         $p[':q'] = '%' . $term . '%';
     }
-    $rows = qa('SELECT id, filename, alt, mime, width, height, size, variants, created_at FROM media'
+    if ($filter === 'noalt') {
+        // NULL da "alt metni yok" sayılır: sütun 1.0'da NOT NULL DEFAULT ''
+        // ama elle içe aktarılmış kayıtlarda NULL görülebiliyor.
+        $kos[] = '(alt IS NULL OR alt = \'\')';
+    } elseif ($filter === 'queued' && media_has_queue()) {
+        $kos[] = '(variant_state = \'queued\' OR variant_state = \'\' OR variant_state IS NULL)';
+    }
+    return [$kos ? ' WHERE ' . implode(' AND ', $kos) : '', $p];
+}
+
+/** Medya listesi (yeniden eskiye). */
+function media_list($q = '', $limit = 60, $offset = 0, $filter = '') {
+    $limit = max(1, min(200, (int)$limit));
+    $offset = max(0, (int)$offset);
+    list($where, $p) = media_where($q, (string)$filter);
+    $rows = qa('SELECT ' . media_select_columns() . ' FROM media'
         . $where . ' ORDER BY id DESC LIMIT ' . $limit . ' OFFSET ' . $offset, $p);
     $out = [];
     foreach ($rows as $r) { $out[] = media_decorate($r); }
@@ -416,11 +538,13 @@ function media_list($q = '', $limit = 60, $offset = 0) {
 }
 
 /** Aramaya uyan medya sayısı. */
-function media_count($q = '') {
-    $term = media_like_term($q);
-    if ($term === '') { return (int)qv('SELECT COUNT(*) FROM media', [], 0); }
-    return (int)qv('SELECT COUNT(*) FROM media WHERE (filename LIKE :q OR alt LIKE :q)', [':q' => '%' . $term . '%'], 0);
+function media_count($q = '', $filter = '') {
+    list($where, $p) = media_where($q, (string)$filter);
+    return (int)qv('SELECT COUNT(*) FROM media' . $where, $p, 0);
 }
+
+/** Alt metni boş görsel sayısı (erişilebilirlik uyarısı). */
+function media_missing_alt_count() { return media_count('', 'noalt'); }
 
 /** Kütüphanedeki toplam bayt. */
 function media_total_size() {
@@ -429,7 +553,7 @@ function media_total_size() {
 
 /** Tek kayıt (zenginleştirilmiş). */
 function media_get($id) {
-    $row = q1('SELECT id, filename, alt, mime, width, height, size, variants, created_at FROM media WHERE id = :i', [':i' => (int)$id]);
+    $row = q1('SELECT ' . media_select_columns() . ' FROM media WHERE id = :i', [':i' => (int)$id]);
     return $row ? media_decorate($row) : null;
 }
 
@@ -556,6 +680,12 @@ function media_regenerate_variants($id) {
     if (is_array($info) && !empty($info[0]) && !empty($info[1])) {
         $data['width'] = (int)$info[0];
         $data['height'] = (int)$info[1];
+    }
+    // 1.3-08: elle yenileme de kuyruk durumunu kapatır, yoksa cron aynı kaydı
+    // bir daha işlemeye kalkar.
+    if (media_has_queue()) {
+        $data['variant_state'] = 'done';
+        $data['variant_at'] = now();
     }
     db_update('media', $data, 'id = :id', [':id' => $id]);
     return $out;
@@ -743,4 +873,346 @@ function media_storage_stats() {
         'dir'             => UPLOAD_DIR,
         'writable'        => is_dir(UPLOAD_DIR) && is_writable(UPLOAD_DIR),
     ];
+}
+
+// ============================================================================
+// 1.3-08 — VARYANT KUYRUĞU
+//
+// NEDEN: yükleme isteği artık yalnız `thumb` üretiyor (bkz. media_save_upload
+// adım 8). Kalan boyutlar ve WebP kopyaları burada, cron turunda üretilir.
+// Kuyruk cron BÜTÇESİNE saygılıdır: her kayıttan önce `cron_over_budget()`
+// sorulur ve rezerv kadar süre kalmadıysa döngü BAŞTAN durur — yarım kalan
+// bir GD işlemi bozuk dosya bırakabilirdi.
+// ============================================================================
+
+/** Tek bir kaydın varyant üretimi ne kadar sürebilir (sn)? Bütçe rezervi. */
+function media_queue_reserve() { return 6; }
+
+/** Bir cron turunda en çok kaç kayıt işlenir? */
+function media_queue_batch() {
+    $v = (int)setting('media_queue_batch', '8');
+    return max(1, min(50, $v ?: 8));
+}
+
+/** Kuyrukta bekleyen kayıt sayısı (varyantı hiç üretilmemiş olanlar dahil). */
+function media_queue_size() {
+    if (!media_has_queue()) { return 0; }
+    return (int)qv('SELECT COUNT(*) FROM media
+        WHERE (variant_state = \'queued\' OR variant_state = \'\' OR variant_state IS NULL)', [], 0);
+}
+
+/** Kuyruk özeti: durum => adet. */
+function media_queue_stats() {
+    $out = ['queued' => 0, 'done' => 0, 'failed' => 0, 'skipped' => 0];
+    if (!media_has_queue()) { return $out; }
+    foreach (qa('SELECT variant_state, COUNT(*) AS n FROM media GROUP BY variant_state') as $r) {
+        $k = (string)$r['variant_state'];
+        if ($k === '') { $k = 'queued'; }
+        if (!isset($out[$k])) { $out[$k] = 0; }
+        $out[$k] += (int)$r['n'];
+    }
+    return $out;
+}
+
+/** Sıradaki bekleyen kayıtlar (en az denenmiş önce, sonra en yeni yükleme). */
+function media_variants_pending($limit = 8) {
+    if (!media_has_queue()) { return []; }
+    $limit = max(1, min(50, (int)$limit));
+    return qa('SELECT id, filename, mime, variants, variant_tries FROM media
+        WHERE (variant_state = \'queued\' OR variant_state = \'\' OR variant_state IS NULL)
+        ORDER BY variant_tries ASC, id DESC LIMIT ' . $limit);
+}
+
+/**
+ * Tek kaydın eksik varyantlarını üretir ve kuyruk durumunu kapatır.
+ * MEVCUT varyantların üstüne yazmaz — yüklemede üretilen `thumb` korunur,
+ * JSON birleştirilir.
+ *
+ * @return array ['ok'=>bool,'state'=>string,'note'=>string,'made'=>int]
+ */
+function media_variant_worker($id) {
+    $id = (int)$id;
+    $row = q1('SELECT id, filename, mime, variants, variant_tries FROM media WHERE id = :i', [':i' => $id]);
+    if (!$row) { return ['ok' => false, 'state' => '', 'note' => 'Kayıt yok.', 'made' => 0]; }
+    if (!media_has_queue()) { return ['ok' => false, 'state' => '', 'note' => 'Göç 025 uygulanmamış.', 'made' => 0]; }
+
+    $rel = (string)$row['filename'];
+    $tries = (int)arr($row, 'variant_tries', 0) + 1;
+    $eski = [];
+    if (!empty($row['variants'])) {
+        $d = json_decode((string)$row['variants'], true);
+        if (is_array($d)) { $eski = $d; }
+    }
+
+    $kapat = function ($state, $note, $variants, $made) use ($id, $tries) {
+        db_update('media', [
+            'variants'      => $variants ? (string)json_encode($variants, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '',
+            'variant_state' => $state,
+            'variant_at'    => now(),
+            'variant_tries' => $tries,
+        ], 'id = :id', [':id' => $id]);
+        return ['ok' => $state !== 'failed', 'state' => $state, 'note' => $note, 'made' => $made];
+    };
+
+    if (!media_gd_available()) { return $kapat('skipped', 'GD yok.', $eski, 0); }
+
+    $abs = media_safe_path($rel);
+    if ($abs === '' || !is_file($abs)) {
+        // Dosya diskte yok: bir daha denemenin anlamı yok.
+        return $kapat('failed', 'Özgün dosya diskte yok.', $eski, 0);
+    }
+    if (strtolower((string)arr($row, 'mime', '')) === 'image/gif') {
+        // Hareketli GIF küçültülürse animasyon kaybolur (Ajan-2 kararı korunur).
+        return $kapat('skipped', 'GIF — animasyon korunuyor.', $eski, 0);
+    }
+    if ($tries > 3) {
+        return $kapat('failed', '3 denemede üretilemedi.', $eski, 0);
+    }
+
+    $yeni = media_make_variants($abs, $rel);   // hepsi + WebP
+    if (!$yeni) {
+        // Görsel eşiklerin altında ya da GD dosyayı açamadı. İkisi de kalıcı
+        // durum sayılır: 'done' işaretlenir, ön yüz özgün dosyayı kullanır.
+        return $kapat('done', 'Küçültme gerekmedi.', $eski, 0);
+    }
+
+    // Birleştir: yeni üretim eskiyi ezer, eskide olup yenide olmayan korunur.
+    $birlesik = $eski;
+    foreach ($yeni as $k => $v) {
+        if ($k === 'webp' && is_array($v)) {
+            $mevcut = (isset($birlesik['webp']) && is_array($birlesik['webp'])) ? $birlesik['webp'] : [];
+            $birlesik['webp'] = $v + $mevcut;
+            continue;
+        }
+        $birlesik[$k] = $v;
+    }
+    $sayi = 0;
+    foreach ($yeni as $k => $v) { $sayi += is_array($v) ? count($v) : 1; }
+    return $kapat('done', $sayi . ' türev üretildi.', $birlesik, $sayi);
+}
+
+/**
+ * Cron görevi: bekleyen varyantları üretir.
+ * cron.php'nin modül listesinde 'media' zaten var (cron_modules_load).
+ */
+function media_cron_variants() {
+    if (!media_has_queue()) { return ['note' => 'kuyruk yok (göç 025 uygulanmamış)', 'items' => 0]; }
+    if (!media_gd_available()) { return ['note' => 'GD yok — kuyruk beklemede', 'items' => 0]; }
+
+    $islenen = 0;
+    $hata = 0;
+    foreach (media_variants_pending(media_queue_batch()) as $r) {
+        // BÜTÇE: bir kaydı işleyecek kadar süre kalmadıysa hiç başlama.
+        if (function_exists('cron_over_budget') && cron_over_budget(media_queue_reserve())) { break; }
+        $res = media_variant_worker((int)$r['id']);
+        if (empty($res['ok'])) { $hata++; }
+        $islenen++;
+    }
+    $kalan = media_queue_size();
+    if ($islenen > 0 && function_exists('cache_flush')) { cache_flush(); }
+    return [
+        'items' => $islenen,
+        'note'  => $islenen . ' görsel işlendi, ' . $kalan . ' kuyrukta'
+                   . ($hata ? ', ' . $hata . ' hata' : ''),
+    ];
+}
+
+// ============================================================================
+// 1.3-08 — KULLANILMAYAN GÖRSEL BULUCU
+//
+// DİKKAT — SİLME YIKICIDIR. Bu bölüm YALNIZ ADAY ÜRETİR; silme ayrı bir uçta,
+// açık onayla ve `media.delete_any` izniyle yapılır.
+//
+// YANLIŞ POZİTİF RİSKİ (raporda da yazılı):
+//   · Gövde HTML'i METİN OLARAK taranır: src, srcset, href, data-* ve CSS
+//     url() içinde geçen "uploads/…" benzeri her yol yakalanır. Yani görseli
+//     JS ile kuran, adresi parçalayan ya da yalnız medya id'si saklayan bir
+//     tema/eklenti kullanımı GÖRÜLMEZ → dosya "kullanılmıyor" sanılır.
+//   · Taranan tablolar aşağıda SABİT bir liste. Yeni bir modül görsel adını
+//     kendi tablosuna yazarsa bu liste güncellenmedikçe onun kullandığı
+//     dosyalar kullanılmıyor görünür.
+//   · Tema dosyaları, elle yazılmış HTML ve dışarıdan (başka site, bülten,
+//     sosyal medya paylaşımı) verilen doğrudan bağlantılar HİÇ taranmaz.
+// Bu yüzden arayüz sayıyı ve listeyi ÖNCE gösterir, silmeyi ayrı bir adımda
+// ve açık onayla ister.
+// ============================================================================
+
+/**
+ * Tablo var mı? `schema_has_table()` inc/schema.php'de tanımlıdır ve o dosya
+ * HER bağlamda yüklenmez (inc/media.php yalnız bootstrap + sanitize ister).
+ * 1.3 geliştirmesinde bu, kullanılmayan görsel taramasını ölümcül hatayla
+ * düşürdü — ölçümle yakalandı. Yoksa sorgu deneyerek karar verilir.
+ */
+function media_table_exists($table) {
+    if (function_exists('schema_has_table')) { return schema_has_table($table); }
+    try { qv('SELECT 1 FROM ' . preg_replace('/[^a-z0-9_]/i', '', $table) . ' LIMIT 1'); return true; }
+    catch (Throwable $e) { return false; }
+}
+
+/** Sütun var mı? (aynı gerekçe) */
+function media_column_exists($table, $column) {
+    if (function_exists('schema_has_column')) { return schema_has_column($table, $column); }
+    try {
+        qv('SELECT ' . preg_replace('/[^a-z0-9_]/i', '', $column)
+            . ' FROM ' . preg_replace('/[^a-z0-9_]/i', '', $table) . ' LIMIT 1');
+        return true;
+    } catch (Throwable $e) { return false; }
+}
+
+/** Metin içinde geçen görsel yollarını toplar (küçük harfe indirgenmiş). */
+function media_scan_text_refs($text, array &$acc) {
+    $t = (string)$text;
+    if ($t === '') { return; }
+    // JSON içinde eğik çizgi kaçışlı olabilir: "2026\/08\/foto.jpg"
+    $t = str_replace('\\/', '/', $t);
+    // HTML varlıkları: &amp; ve &#47; gibi kaçışlar yolu bozmasın.
+    $t = html_entity_decode($t, ENT_QUOTES, 'UTF-8');
+    if (!preg_match_all('#[A-Za-z0-9][A-Za-z0-9/_\-\.]{0,250}\.(?:jpe?g|png|gif|webp)#i', $t, $m)) { return; }
+    foreach ($m[0] as $yol) {
+        $yol = strtolower(ltrim(str_replace('\\', '/', $yol), '/'));
+        $acc[$yol] = true;
+        // 'uploads/2026/08/foto.jpg' → '2026/08/foto.jpg' (media.filename biçimi)
+        $p = strpos($yol, 'uploads/');
+        if ($p !== false) { $acc[substr($yol, $p + 8)] = true; }
+        // Yalnız dosya adı da eşleşsin: adres parçalanmış olabilir.
+        $acc[basename($yol)] = true;
+    }
+}
+
+/**
+ * Görsel adının geçtiği yerlerin dizini.
+ * @return array ['2026/08/foto.jpg' => true, 'foto.jpg' => true, …]
+ */
+function media_usage_index() {
+    $acc = [];
+
+    // 1) Haber görseli + gövde + spot + SEO açıklaması (çöptekiler DAHİL:
+    //    geri alınabilecek bir haberin görseli kullanılıyor sayılır).
+    foreach (qa('SELECT image, body, spot, seo_desc FROM posts') as $r) {
+        media_scan_text_refs(arr($r, 'image', ''), $acc);
+        media_scan_text_refs(arr($r, 'body', ''), $acc);
+        media_scan_text_refs(arr($r, 'spot', ''), $acc);
+        media_scan_text_refs(arr($r, 'seo_desc', ''), $acc);
+    }
+
+    // 2) Sabit sayfalar
+    if (media_table_exists('pages')) {
+        foreach (qa('SELECT body FROM pages') as $r) { media_scan_text_refs(arr($r, 'body', ''), $acc); }
+    }
+
+    // 3) Reklamlar (görsel reklam + ham HTML kodu)
+    if (media_table_exists('ads')) {
+        foreach (qa('SELECT image, html FROM ads') as $r) {
+            media_scan_text_refs(arr($r, 'image', ''), $acc);
+            media_scan_text_refs(arr($r, 'html', ''), $acc);
+        }
+    }
+
+    // 4) Kategoriler (kapak görseli olan kurulumlar)
+    if (media_table_exists('categories') && media_column_exists('categories', 'image')) {
+        foreach (qa('SELECT image FROM categories') as $r) { media_scan_text_refs(arr($r, 'image', ''), $acc); }
+    }
+
+    // 5) Ayarlar: logo, favicon, varsayılan paylaşım görseli, blok dizilimi
+    //    JSON'u, künye… Değerin tamamı taranır, anahtar adı önemsizdir.
+    foreach (qa('SELECT sval FROM settings') as $r) { media_scan_text_refs(arr($r, 'sval', ''), $acc); }
+
+    return $acc;
+}
+
+/**
+ * Hiçbir yerde geçmeyen medya kayıtları.
+ *
+ * @param int $limit En çok kaç aday döndürülsün
+ * @return array ['items'=>[…], 'total'=>int, 'scanned'=>int, 'bytes'=>int]
+ */
+function media_unused($limit = 100) {
+    $limit = max(1, min(500, (int)$limit));
+    $kullanim = media_usage_index();
+
+    $items = [];
+    $toplam = 0;
+    $tarandi = 0;
+    $bayt = 0;
+    foreach (qa('SELECT ' . media_select_columns() . ' FROM media ORDER BY id DESC') as $r) {
+        $tarandi++;
+        $fn = strtolower(ltrim(str_replace('\\', '/', (string)$r['filename']), '/'));
+        if ($fn === '') { continue; }
+        if (isset($kullanim[$fn]) || isset($kullanim[basename($fn)])) { continue; }
+        $toplam++;
+        $bayt += (int)arr($r, 'size', 0);
+        if (count($items) < $limit) { $items[] = media_decorate($r); }
+    }
+    return ['items' => $items, 'total' => $toplam, 'scanned' => $tarandi,
+            'bytes' => $bayt, 'bytes_text' => media_human_size($bayt)];
+}
+
+// ============================================================================
+// 1.3-08 — TOPLU İŞLEMLER
+// ============================================================================
+
+/** İstekten gelen id listesini temizler (tekilleştirir, en çok 200 kayıt). */
+function media_clean_ids($ids) {
+    if (is_string($ids)) { $ids = explode(',', $ids); }
+    if (!is_array($ids)) { return []; }
+    $out = [];
+    foreach ($ids as $x) {
+        if (!is_scalar($x)) { continue; }
+        $i = (int)$x;
+        if ($i > 0 && !in_array($i, $out, true)) { $out[] = $i; }
+        if (count($out) >= 200) { break; }
+    }
+    return $out;
+}
+
+/**
+ * Toplu silme. Her kayıt için `media_delete()` çağrılır (türevler de gider).
+ * ÇAĞIRAN, `media.delete_any` iznini VE kullanıcının onayını doğrulamış olmalıdır.
+ *
+ * @return array ['ok','deleted'=>int,'failed'=>int,'errors'=>[…]]
+ */
+function media_delete_many($ids) {
+    $ids = media_clean_ids($ids);
+    $silinen = 0;
+    $hata = 0;
+    $mesajlar = [];
+    foreach ($ids as $id) {
+        $r = media_delete($id);
+        if (!empty($r['ok'])) { $silinen++; continue; }
+        $hata++;
+        if (count($mesajlar) < 10) { $mesajlar[] = '#' . $id . ': ' . (string)arr($r, 'error', ''); }
+    }
+    return ['ok' => true, 'deleted' => $silinen, 'failed' => $hata, 'errors' => $mesajlar];
+}
+
+/** Toplu alt metin ataması (aynı metin birden çok kayda). */
+function media_update_alt_many($ids, $alt) {
+    $ids = media_clean_ids($ids);
+    $clean = sanitize_line((string)$alt, 255);
+    $n = 0;
+    foreach ($ids as $id) {
+        $r = media_update_alt($id, $clean);
+        if (!empty($r['ok'])) { $n++; }
+    }
+    return ['ok' => true, 'updated' => $n, 'alt' => $clean];
+}
+
+// ============================================================================
+// KAYIT DEFTERLERİ
+// ============================================================================
+
+// Varyant kuyruğu — 'ucuz' DEĞİL: GD ile görsel küçültmek saniyeler sürer ve
+// bağlantıyı kapatamayan SAPI'lerde panel isteğini bekletir (cron.php B07).
+cron_register('medya', 'media_cron_variants', false);
+
+/* KÖPRÜ (1.3-09) — zamanlı manşet görevi `inc/api/headlines_api.php` içinde
+ * tanımlıdır. cron.php'nin modül listesinde (cron_modules_load) 'media' VAR,
+ * 'headlines' YOK; o dosya orkestratöre ait olduğu için oraya eklenemedi. Bu
+ * `require_once` olmadan `cron_register('manset', …)` hiç çalışmaz ve zamanlı
+ * manşet sessizce ölür. Orkestratörden modül listesine eklenmesi istendi
+ * (gelistirme/1.3-ajan-c.md → İstekler); eklendiğinde bu satır silinebilir.
+ * Yinelenmeye karşı güvenli: api.php dosyayı zaten glob ile yükler ve
+ * headlines_api.php, api_register tanımlı değilse kayıt bloğunu atlar. */
+if (defined('MANSET_BOOTSTRAPPED') && is_file(INC_DIR . '/api/headlines_api.php')) {
+    require_once INC_DIR . '/api/headlines_api.php';
 }

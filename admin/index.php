@@ -54,8 +54,10 @@ function admin_nav() {
 
         'rss'         => ['label' => 'RSS Kaynakları',     'perm' => 'rss.manage',         'group' => 'Otomasyon', 'icon' => '⟳'],
         'ai'          => ['label' => 'Yapay Zekâ',         'perm' => 'ai.use',             'group' => 'Otomasyon', 'icon' => '◆'],
+        'ai-denetim'  => ['label' => 'YZ Denetimi',         'perm' => 'ai.use',             'group' => 'Otomasyon', 'icon' => '◈'],
 
         'hizli'       => ['label' => 'Hızlı Giriş',        'perm' => 'posts.create',       'group' => 'İçerik',    'icon' => '⚡'],
+        'takvim'      => ['label' => 'Yayın Takvimi',      'perm' => 'posts.view',         'group' => 'İçerik',    'icon' => '▦'],
 
         'theme'       => ['label' => 'Tema Editörü',       'perm' => 'theme.manage',       'group' => 'Görünüm',   'icon' => '◐'],
 

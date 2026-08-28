@@ -91,6 +91,16 @@ $fKat    = inp_i('kategori', 0);
 $fYazar  = inp_i('yazar', 0);
 $fYz     = inp_i('yz', 0) === 1;
 $fArama  = sanitize_line((string)inp('q', ''), 120);
+// 1.3-11 — gövde içi arama, tarih aralığı, etiket süzgeci.
+$fGovde  = inp_i('govde', 0) === 1;
+$fEtiket = sanitize_line((string)inp('etiket', ''), 60);
+/** 'YYYY-AA-GG' değilse boş döner — tarih girdisi doğrudan SQL'e gitmesin diye. */
+$tarihSuz = function ($ham) {
+    $ham = trim((string)$ham);
+    return preg_match('/^\d{4}-\d{2}-\d{2}$/', $ham) ? $ham : '';
+};
+$fBas    = $tarihSuz(inp('bas', ''));
+$fBit    = $tarihSuz(inp('bit', ''));
 $sayfaNo = max(1, inp_i('sayfa', 1));
 $perPage = 20;
 
@@ -130,8 +140,30 @@ if ($fKat > 0)   { $where[] = 'p.category_id = :cid'; $prm[':cid'] = $fKat; }
 if ($fYazar > 0 && $hepsiniDuzenle) { $where[] = 'p.author_id = :aid'; $prm[':aid'] = $fYazar; }
 if ($fYz)        { $where[] = 'p.ai_generated = 1'; }
 if ($fArama !== '') {
-    $where[] = '(p.title LIKE :q OR p.slug LIKE :q OR p.spot LIKE :q)';
+    // Gövde içi arama İSTEĞE BAĞLI: `body` üzerinde LIKE indeks kullanamaz ve
+    // arşiv büyüdükçe tam tarama olur. Tam metin arama (FTS5 / FULLTEXT) 1.3'te
+    // ayrı bir iş kolunun konusu; buradaki kutu, editörün "metnin içinde geçiyordu"
+    // dediği haberi bulabilmesi için ölçülü bir açık kapıdır.
+    $where[] = $fGovde
+        ? '(p.title LIKE :q OR p.slug LIKE :q OR p.spot LIKE :q OR p.body LIKE :q)'
+        : '(p.title LIKE :q OR p.slug LIKE :q OR p.spot LIKE :q)';
     $prm[':q'] = '%' . str_replace(['%', '_'], ' ', $fArama) . '%';
+}
+if ($fEtiket !== '') {
+    // `tags` virgülle ayrılmış tek alan (1.3'te normalizasyon ayrı bir iş kolunda).
+    // Kısmi eşleşme kabul edilir; joker karakterler etkisizleştirilir.
+    $where[] = 'p.tags LIKE :etiket';
+    $prm[':etiket'] = '%' . str_replace(['%', '_'], ' ', $fEtiket) . '%';
+}
+// Tarih aralığı yayın tarihine, yoksa oluşturma tarihine bakar — listenin
+// sıralama ölçütüyle (COALESCE(published_at, created_at)) aynı olsun.
+if ($fBas !== '') {
+    $where[] = 'COALESCE(p.published_at, p.created_at) >= :bas';
+    $prm[':bas'] = $fBas . ' 00:00:00';
+}
+if ($fBit !== '') {
+    $where[] = 'COALESCE(p.published_at, p.created_at) <= :bit';
+    $prm[':bit'] = $fBit . ' 23:59:59';
 }
 $sqlWhere = ' WHERE ' . implode(' AND ', $where);
 
@@ -146,9 +178,12 @@ if ($copVar) {
     $copSayi = (int)qv('SELECT COUNT(*) FROM posts p ' . $copWhere, $copPrm, 0);
 }
 $copSutun = $copVar ? ' p.deleted_at,' : '';
+// Düzenleme kilidi sütunları göç 028 ile gelir; yoksa listede rozet çizilmez.
+$kilitVar = function_exists('revisions_ready') && revisions_ready();
+$kilitSutun = $kilitVar ? ' p.locked_by, p.locked_at,' : '';
 
 $haberler = qa('SELECT p.id, p.title, p.slug, p.status, p.type, p.image, p.category_id, p.author_id,
-        p.ai_generated, p.view_count, p.published_at, p.created_at, p.is_headline,' . $copSutun . '
+        p.ai_generated, p.view_count, p.published_at, p.created_at, p.is_headline,' . $copSutun . $kilitSutun . '
         c.name AS category_name, c.color AS category_color, u.name AS author_name
     FROM posts p
     LEFT JOIN categories c ON c.id = p.category_id
@@ -165,7 +200,12 @@ foreach ($yazarlar as $y) { $yazarSecenek[(int)$y['id']] = $y['name']; }
 $filtreQuery = array_filter([
     'durum' => $fDurum, 'kategori' => $fKat ?: '', 'yazar' => $fYazar ?: '',
     'yz' => $fYz ? 1 : '', 'q' => $fArama,
+    'govde' => $fGovde ? 1 : '', 'etiket' => $fEtiket, 'bas' => $fBas, 'bit' => $fBit,
 ], function ($v) { return $v !== '' && $v !== 0; });
+
+// Toplu üstveri atama (1.3-11) — yalnız tam düzenleme yetkisi olanda.
+$topluAtama = $hepsiniDuzenle && !$copKip
+    && function_exists('revisions_ready') && revisions_ready();
 ?>
 
 <div class="sayfa-basligi">
@@ -211,6 +251,17 @@ $filtreQuery = array_filter([
     <span class="kucuk">Yalnız YZ üretimi</span>
   </label>
   <input type="search" name="q" value="<?= esc($fArama) ?>" placeholder="Başlık, slug, spot…" aria-label="Haber ara">
+  <label class="onay-satir" style="margin:0" title="Haber metninin içinde de arar (büyük arşivde yavaş olabilir).">
+    <input type="checkbox" name="govde" value="1" <?= $fGovde ? 'checked' : '' ?>>
+    <span class="kucuk">Gövdede de ara</span>
+  </label>
+  <input type="text" name="etiket" value="<?= esc($fEtiket) ?>" placeholder="Etiket…" aria-label="Etikete göre süz" size="12">
+  <label class="kucuk soluk" style="margin:0">Başlangıç
+    <input type="date" name="bas" value="<?= esc($fBas) ?>" aria-label="Başlangıç tarihi">
+  </label>
+  <label class="kucuk soluk" style="margin:0">Bitiş
+    <input type="date" name="bit" value="<?= esc($fBit) ?>" aria-label="Bitiş tarihi">
+  </label>
   <button type="submit" class="dugme">Filtrele</button>
   <?php if ($filtreQuery): ?>
     <a class="dugme" href="<?= esc(admin_url('posts')) ?>">Sıfırla</a>
@@ -245,6 +296,35 @@ $filtreQuery = array_filter([
       <button type="button" class="dugme" id="topluUygula">Uygula</button>
       <span class="sag kucuk soluk" id="secimSayisi"></span>
     </div>
+  <?php endif; ?>
+
+  <?php if ($topluAtama): ?>
+    <?php /* Toplu kategori / etiket atama (1.3-11).
+             YIKICI OLABİLİR: kaç kayda uygulanacağı ekranda yazar ve onay istenir;
+             sunucu da `confirm` ve seçim sayısı eşleşmesi arar. Her kayda önce
+             sürüm yazılır, yani işlem geri alınabilir. */ ?>
+    <details class="kart" id="topluAtamaKart">
+      <summary class="kart-baslik" style="cursor:pointer">Toplu kategori / etiket atama</summary>
+      <div class="arac-cubugu bosluk-ust">
+        <select id="atamaKategori" aria-label="Atanacak kategori">
+          <option value="">Kategoriye dokunma</option>
+          <option value="0">Kategorisiz yap</option>
+          <?= admin_options($kategoriSecenek, '__yok__') ?>
+        </select>
+        <input type="text" id="atamaEtiket" placeholder="etiket1, etiket2" aria-label="Atanacak etiketler">
+        <select id="atamaEtiketKip" aria-label="Etiket işlemi">
+          <option value="add">Etiket ekle</option>
+          <option value="remove">Etiket çıkar</option>
+          <option value="replace">Etiketleri değiştir (siler)</option>
+        </select>
+        <button type="button" class="dugme" id="atamaUygula">Uygula</button>
+      </div>
+      <p class="form-yardim">
+        Seçili haberlere uygulanır. <strong>Etiketleri değiştir</strong> mevcut etiketleri siler;
+        diğer iki seçenek eklemeli/çıkarmalıdır. Her haberin önceki hâli sürüm geçmişine yazılır,
+        yani işlem tek tek geri alınabilir. Başka bir editörün açık düzenlemesi olan haberler atlanır.
+      </p>
+    </details>
   <?php endif; ?>
 
   <div class="tablo-sarma">
@@ -282,6 +362,16 @@ $filtreQuery = array_filter([
               <?php if ((int)$h['ai_generated'] === 1): ?> <?= admin_badge('YZ', 'ai') ?><?php endif; ?>
               <?php if ((int)$h['is_headline'] === 1): ?> <?= admin_badge('manşet', 'bilgi') ?><?php endif; ?>
               <?php if ($h['type'] !== 'haber'): ?> <?= admin_badge($turler[$h['type']] ?? $h['type'], 'notr') ?><?php endif; ?>
+              <?php
+              // "Başkası düzenliyor" rozeti — süresi dolmuş kilit gösterilmez.
+              if ($kilitVar && (int)arr($h, 'locked_by', 0) > 0
+                  && (int)$h['locked_by'] !== (int)$me['id']
+                  && (string)arr($h, 'locked_at', '') !== ''
+                  && strtotime((string)$h['locked_at']) >= time() - revisions_lock_ttl()) {
+                  $kimDuzenler = (string)qv('SELECT name FROM users WHERE id = :i', [':i' => (int)$h['locked_by']], '');
+                  echo ' ' . admin_badge('düzenleniyor' . ($kimDuzenler !== '' ? ': ' . $kimDuzenler : ''), 'uyari');
+              }
+              ?>
               <span class="satir-alt tek-satir">/<?= esc($h['slug']) ?></span>
             </td>
             <td class="dar"><?= esc(arr($h, 'category_name', '') ?: '—') ?></td>
@@ -355,6 +445,46 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  /* -------------------------------------------------- toplu kategori/etiket atama (1.3-11) */
+  var atamaDugme = document.getElementById('atamaUygula');
+  if (atamaDugme) {
+    atamaDugme.addEventListener('click', function () {
+      var ids = secilenler();
+      if (!ids.length) { M.toast('warn', 'Önce haber seçin.'); return; }
+
+      var katHam = document.getElementById('atamaKategori').value;
+      var etiket = document.getElementById('atamaEtiket').value.trim();
+      var kip = document.getElementById('atamaEtiketKip').value;
+      if (katHam === '' && etiket === '' && kip !== 'replace') {
+        M.toast('warn', 'Uygulanacak bir değişiklik seçmediniz.'); return;
+      }
+
+      /* ONAY METNİ KAÇ KAYDA UYGULANACAĞINI YAZAR — toplu işlem yıkıcı olabilir. */
+      var satir = [];
+      if (katHam !== '') {
+        var s = document.getElementById('atamaKategori');
+        satir.push('kategori → ' + (katHam === '0' ? 'Kategorisiz' : s.options[s.selectedIndex].text));
+      }
+      if (etiket !== '' || kip === 'replace') {
+        satir.push(kip === 'add' ? ('etiket eklenecek: ' + etiket)
+                 : (kip === 'remove' ? ('etiket çıkarılacak: ' + etiket)
+                 : ('MEVCUT ETİKETLER SİLİNİP yerine yazılacak: ' + (etiket || '(boş)'))));
+      }
+      if (!M.onay(ids.length + ' habere uygulanacak:\n· ' + satir.join('\n· ')
+        + '\n\nHer haberin önceki hâli sürüm geçmişine yazılacak (geri alınabilir).\nOnaylıyor musunuz?')) { return; }
+
+      var istek = { ids: ids, confirm: true, expected: ids.length, tag_mode: kip };
+      if (katHam !== '') { istek.category_id = parseInt(katHam, 10) || 0; }
+      if (etiket !== '' || kip === 'replace') { istek.tags = etiket; }
+
+      atamaDugme.disabled = true;
+      M.api('posts.bulk_assign', istek).then(function (r) {
+        if (M.sonuc(r, 'Atama tamam.')) { setTimeout(function () { location.reload(); }, 600); }
+        else { atamaDugme.disabled = false; }
+      });
+    });
+  }
+
   /* Çöp kutusu işlemleri — onay diyalogu admin.js'teki data-onay kancasından gelir. */
   function satirIslemi(nitelik, uc, mesaj) {
     M.qsa('[' + nitelik + ']').forEach(function (b) {
@@ -395,9 +525,20 @@ if (!$yayinlayabilir && $post && in_array((string)$post['status'], ['published',
 $yayinTarihi = $v('published_at');
 $yayinTarihiLocal = $yayinTarihi !== '' ? str_replace(' ', 'T', substr($yayinTarihi, 0, 16)) : '';
 $gorsel = $v('image');
+
+/* 1.3-01 / 1.3-02 — sürüm geçmişi, otomatik kayıt, düzenleme kilidi, notlar.
+   Göç 028 uygulanmamışsa (ya da yeni haberde, henüz id yokken) tüm blok
+   sessizce yok sayılır; editör 1.2'deki gibi çalışır. */
+$surumVar   = function_exists('revisions_ready') && revisions_ready() && $post !== null;
+$otoKayit   = $surumVar && !$ustveriKipi;          // üstveri kipi gövdeye dokunamaz
+$geriYukler = $otoKayit && ($hepsiniDuzenle || can($me, 'posts.edit_own') || $telDuzenler);
+$yayinlayan = $surumVar ? revisions_publisher_name($post) : '';
 ?>
 
 <script src="<?= esc(url_asset('editor.js')) ?>?v=<?= esc(MANSET_VERSION) ?>" defer></script>
+<?php if ($surumVar): ?>
+<script src="<?= esc(url_asset('revisions.js')) ?>?v=<?= esc(MANSET_VERSION) ?>"></script>
+<?php endif; ?>
 
 <div class="sayfa-basligi">
   <h1><?= $post ? 'Haberi düzenle' : 'Yeni haber' ?></h1>
@@ -417,6 +558,11 @@ $gorsel = $v('image');
     <button type="submit" form="haberForm" class="dugme birincil"><?= $ustveriKipi ? 'Üstveriyi kaydet' : 'Kaydet' ?></button>
   </div>
 </div>
+
+<?php if ($surumVar): ?>
+  <?php /* Düzenleme kilidi uyarısı — içeriği revisions.js doldurur. */ ?>
+  <div id="kilitUyari" hidden></div>
+<?php endif; ?>
 
 <?php if ($ustveriKipi): ?>
   <div class="uyari warn mini">
@@ -606,6 +752,27 @@ $gorsel = $v('image');
       </div>
     </div>
 
+    <?php if ($surumVar): ?>
+    <div class="kart">
+      <div class="kart-baslik">Sürüm geçmişi</div>
+      <?php if ($otoKayit): ?>
+        <p class="form-yardim" id="otoKayitDurum">
+          Otomatik kayıt <?= (int)revisions_autosave_interval() ?> saniyede bir çalışır.
+          <strong>Canlı metni değiştirmez</strong> — yalnız sürüm geçmişine yazar.
+        </p>
+      <?php endif; ?>
+      <div id="surumGecmis"><p class="soluk kucuk">Yükleniyor…</p></div>
+    </div>
+
+    <div class="kart">
+      <div class="kart-baslik">Notlar ve onay</div>
+      <?php if ($yayinlayan !== ''): ?>
+        <p class="mini soluk">Yayımlayan: <?= esc($yayinlayan) ?></p>
+      <?php endif; ?>
+      <div id="haberNotlar"><p class="soluk kucuk">Yükleniyor…</p></div>
+    </div>
+    <?php endif; ?>
+
     <div class="kart">
       <div class="kart-baslik">Yapay zekâ yardımcıları</div>
       <div class="dugme-grup">
@@ -664,6 +831,57 @@ document.addEventListener('DOMContentLoaded', function () {
   var elSeoDesc = document.getElementById('h_seo_desc');
   var elStatus = document.getElementById('h_status');
   var elId = M.qs('input[name=id]', form);
+
+  /* ------------------------------------------------ sürüm geçmişi / kilit (1.3-01) */
+  var surumVar = <?= $surumVar ? 'true' : 'false' ?>;
+  var otoKayit = <?= $otoKayit ? 'true' : 'false' ?>;
+  var surumler = null;
+
+  function govdeMetni() {
+    return editor ? editor.html() : document.getElementById('h_body').value;
+  }
+
+  if (surumVar && window.MansetRevisions) {
+    surumler = MansetRevisions.baglat({
+      postId: parseInt(elId.value, 10) || 0,
+      userId: <?= (int)$me['id'] ?>,
+      interval: <?= (int)(function_exists('revisions_autosave_interval') ? revisions_autosave_interval() : 30) ?>,
+      kilitEl: document.getElementById('kilitUyari'),
+      gecmisEl: document.getElementById('surumGecmis'),
+      notEl: document.getElementById('haberNotlar'),
+      durumEl: document.getElementById('otoKayitDurum'),
+      geriYukleyebilir: <?= $geriYukler ? 'true' : 'false' ?>,
+      yayinlayabilir: <?= $yayinlayabilir ? 'true' : 'false' ?>,
+      /* Otomatik kayda giden alanlar. `status` ve `published_at` BİLEREK YOK:
+         anlık görüntüye veritabanındaki gerçek yayın durumu yazılır, yoksa bir
+         otomatik kayıt geri yüklendiğinde yayın durumu da geri sarılırdı. */
+      oku: function () {
+        return {
+          title: elTitle.value, slug: elSlug.value, spot: elSpot.value,
+          body: govdeMetni(), tags: elTags.value, image: elImage.value,
+          seo_title: elSeoTitle.value, seo_desc: elSeoDesc.value,
+          category_id: parseInt(document.getElementById('h_category').value, 10) || 0,
+          type: document.getElementById('h_type').value,
+          teaser: (document.getElementById('h_teaser') || { value: '' }).value,
+          source_name: (document.getElementById('h_source_name') || { value: '' }).value,
+          source_url: (document.getElementById('h_source_url') || { value: '' }).value
+        };
+      }
+    });
+
+    if (otoKayit && surumler) {
+      // Her yazma girişi otomatik kaydı "kirli" işaretler; zamanlayıcı ilk
+      // dokunuşta kurulur, dokunulmayan sekme sunucuya hiç istek atmaz.
+      M.qsa('input, textarea, select', form).forEach(function (a) {
+        a.addEventListener('input', surumler.isaretle);
+        a.addEventListener('change', surumler.isaretle);
+      });
+      var govdeAlan = document.getElementById('h_body');
+      if (govdeAlan && govdeAlan.parentNode) {
+        govdeAlan.parentNode.addEventListener('input', surumler.isaretle);
+      }
+    }
+  }
 
   /* ------------------------------------------------ slug */
   function slugla(s) {
@@ -884,7 +1102,15 @@ document.addEventListener('DOMContentLoaded', function () {
     var kaydetDugmeleri = M.qsa('button[type=submit]');
     kaydetDugmeleri.forEach(function (b) { b.disabled = true; });
 
-    M.api('posts.save', v).then(function (r) {
+    /* GERİ ALINABİLİRLİK: üzerine yazmadan ÖNCE mevcut hâli sürüm olarak sakla.
+       İçerik istemciden gitmez — `revisions.snapshot` veritabanındaki satırı
+       okur. Sürüm yazılamazsa kayıt yine de sürer (geçmiş bir güvence
+       katmanıdır, hizmet kesici değil). */
+    var oncesi = (surumler && v.id > 0)
+      ? surumler.kayitOncesi().catch(function () { return null; })
+      : Promise.resolve(null);
+
+    oncesi.then(function () { return M.api('posts.save', v); }).then(function (r) {
       kaydetDugmeleri.forEach(function (b) { b.disabled = false; });
       if (!M.sonuc(r, 'Haber kaydedildi.')) { return; }
       kirli.temizle();
@@ -898,6 +1124,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (bag && r.url) { bag.href = r.url; }
       }
       slugUyari.hidden = true;
+      if (surumler) { surumler.kayitSonrasi(); }
     });
   });
 

@@ -32,6 +32,15 @@ $bolge = trim((string)theme_setting('bolge_adi', ''));
             <li><a href="<?= esc(url_page($p)) ?>"><?= esc($p['title']) ?></a></li>
           <?php endforeach; ?>
           <li><a href="<?= esc(base_url()) ?>/rss.php">RSS</a></li>
+          <?php /* 1.3-10: keşif sayfaları alt bilgiden de erişilebilir olmalı;
+             yoksa okur onlara yalnız bir haberin içinden ulaşabilirdi. Arşiv
+             yılı VERİDEN gelir, içeriği olmayan yıla bağlantı verilmez. */ ?>
+          <li><a href="<?= esc(url('etiketler')) ?>">Etiketler</a></li>
+          <?php if (function_exists('discover_archive_years')): $kesifYillar = discover_archive_years(); ?>
+            <?php if ($kesifYillar): ?>
+              <li><a href="<?= esc(url('arsiv/' . (int)array_key_first($kesifYillar))) ?>">Arşiv</a></li>
+            <?php endif; ?>
+          <?php endif; ?>
         </ul>
       </div>
     </div>
