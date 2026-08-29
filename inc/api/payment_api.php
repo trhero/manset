@@ -67,6 +67,6 @@ api_register('payment.receipt', function () {
         header('Content-Security-Policy: default-src \'none\'; img-src \'self\'; object-src \'none\'');
         header('Cache-Control: private, no-store');
     }
-    readfile($yol);
+    file_stream_out($yol);
     exit;
 }, ['perm' => 'payments.manage', 'methods' => ['GET']]);

@@ -163,7 +163,7 @@ function tools_system_info() {
     foreach (['db' => DB_DIR, 'uploads' => UPLOAD_DIR, 'uploads/cache' => CACHE_DIR, 'themes' => THEMES_DIR] as $label => $d) {
         $dirs[$label] = ['path' => $d, 'exists' => is_dir($d), 'writable' => is_dir($d) && is_writable($d)];
     }
-    $free = @disk_free_space(ROOT_DIR);
+    $free = disk_free_bytes(ROOT_DIR);
     return [
         'manset_version' => MANSET_VERSION,
         'php_version'    => PHP_VERSION,
@@ -178,8 +178,8 @@ function tools_system_info() {
             'display_errors'      => (string)ini_get('display_errors'),
         ],
         'dirs'            => $dirs,
-        'disk_free'       => $free === false ? 0 : (int)$free,
-        'disk_free_text'  => $free === false ? 'bilinmiyor' : backup_human_size((int)$free),
+        'disk_free'       => $free === null ? 0 : (int)$free,
+        'disk_free_text'  => $free === null ? 'bilinmiyor' : backup_human_size((int)$free),
         'db_driver'       => db_driver(),
         'db_size'         => tools_db_size(),
         'db_size_text'    => backup_human_size(tools_db_size()),
@@ -430,6 +430,6 @@ api_register('logs.download', function () {
     header('Content-Length: ' . (int)filesize($file));
     header('X-Content-Type-Options: nosniff');
     header('Cache-Control: private, no-store');
-    readfile($file);
+    file_stream_out($file);
     exit;
 }, ['perm' => 'tools.manage', 'methods' => ['GET'], 'csrf' => false]);

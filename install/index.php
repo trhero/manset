@@ -294,7 +294,7 @@ function install_requirements() {
     }
 
     // ---- disk boş alanı
-    $bos = @disk_free_space(ROOT_DIR);
+    $bos = disk_free_bytes(ROOT_DIR);
     if ($bos !== false && $bos !== null) {
         $ekle('Disk boş alanı', false, $bos >= 100 * 1024 * 1024,
             'Boş alan: ' . install_bytes_human($bos) . ' · tavsiye edilen en az: 100 MB '

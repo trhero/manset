@@ -1853,6 +1853,14 @@ if [ "${CB}" = "TAMAM" ]; then
   ok "çerez çubuğu her temada gizlenebiliyor"
 else bad "ÇEREZ ÇUBUĞU KAPANMIYOR" "[hidden] kuralı eksik tema(lar): ${CB}"; fi
 
+# --- Paylaşımlı hostingte kapatılan işlevler korumasız çağrılmamalı
+# Canlı bir kurulumda `fpassthru` kapalıydı ve önbellekten sunma yolu ölüyordu:
+# sayfanın ilk ziyareti çalışıyor, YENİLENMESİ hata sayfası döndürüyordu.
+KI="$(probe kapali_islev)"
+if [ "${KI}" = "TAMAM" ]; then
+  ok "kapatılabilir işlevler korumasız çağrılmıyor"
+else bad "KORUMASIZ İŞLEV ÇAĞRISI" "${KI}"; fi
+
 # --- tests/dev-install.php web'den çalıştırılamamalı
 KOD3="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/tests/dev-install.php" 2>/dev/null)"
 if [ "${KOD3}" = "403" ] || [ "${KOD3}" = "404" ]; then

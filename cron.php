@@ -601,8 +601,10 @@ function cron_web_tick_maybe() {
      * ediyordu. Sınır tur bütçesinden türetilir; `ignore_user_abort` ise yalnız
      * bağlantı gerçekten kapatılabildiğinde (fastcgi_finish_request) anlamlıdır.
      */
-    @set_time_limit((int)$d['toplam'] + 30);
-    if (!empty($d['arka_plan'])) { @ignore_user_abort(true); }
+    // `@` KORUMA DEĞİLDİR: paylaşımlı hostingler `set_time_limit`i kapatır ve
+    // PHP 8'de kapatılan işlev silinir - çağrı Error fırlatır, `@` onu yutmaz.
+    if (function_exists('set_time_limit')) { @set_time_limit((int)$d['toplam'] + 30); }
+    if (!empty($d['arka_plan']) && function_exists('ignore_user_abort')) { @ignore_user_abort(true); }
 
     return cron_tick_all([
         'butce'  => (int)$d['butce'],
@@ -790,7 +792,7 @@ if ($mansetCronGiris) {
         exit;
     }
 
-    @set_time_limit(0);
+    if (function_exists('set_time_limit')) { @set_time_limit(0); }
     if (!$isCli) { header('Content-Type: text/plain; charset=utf-8'); }
 
     // YÜKSELTME KANCASI (1.1) — panel kancasıyla aynı desen, görevlerden ÖNCE.

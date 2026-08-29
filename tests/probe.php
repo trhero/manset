@@ -465,6 +465,66 @@ switch ($soru) {
         echo $eksik ? implode(',', $eksik) : 'TAMAM';
         break;
 
+    case 'kapali_islev':
+        // PAYLAŞIMLI HOSTINGTE KAPATILAN İŞLEVLER KORUMASIZ ÇAĞRILIYOR MU?
+        //
+        // Bu sonda gerçek bir arızadan doğdu: bir kullanıcının hostinginde
+        // `fpassthru` yoktu ve önbellekten sunma yolu ölümcül hata veriyordu.
+        // Belirti sinsiydi — sayfanın İLK ziyareti çalışıyor (yazma yolu),
+        // YENİLENMESİ hata sayfası döndürüyordu (okuma yolu).
+        //
+        // PHP 8'de `disable_functions` ile kapatılan işlev, işlev tablosundan
+        // TAMAMEN silinir: çağrı `Error: Call to undefined function` fırlatır.
+        // Baştaki `@` bunu YUTMAZ — `@` uyarıyı bastırır, Error'ı değil. Yani
+        // `@disk_free_space()` yazmak koruma DEĞİLDİR.
+        //
+        // Kural: web isteği sırasında çalışan kodda bu işlevler ya hiç
+        // çağrılmaz ya da aynı dosyada `function_exists()` ile korunur.
+        // tools/ ve tests/ hariçtir: onlar yalnız komut satırında çalışır.
+        $riskli = ['readfile', 'fpassthru', 'passthru', 'shell_exec', 'system',
+                   'proc_open', 'popen', 'disk_free_space', 'symlink', 'link',
+                   'set_time_limit', 'apache_get_modules', 'opcache_reset',
+                   'php_uname', 'getrusage', 'pcntl_fork', 'posix_getpwuid'];
+
+        $dosyalar = [];
+        foreach (['/inc', '/admin', '/themes', '/install'] as $d) {
+            $it = @glob($root . $d . '/{,*/,*/*/}*.php', GLOB_BRACE);
+            if ($it) { $dosyalar = array_merge($dosyalar, $it); }
+        }
+        $dosyalar = array_merge($dosyalar, (array)glob($root . '/*.php'));
+
+        $bulgu = [];
+        foreach ($dosyalar as $dosya) {
+            $kaynak = (string)@file_get_contents($dosya);
+            if ($kaynak === '') { continue; }
+            // token_get_all YORUM ve DİZE içindekileri ayıklar: "readfile"
+            // kelimesi bir açıklamada geçtiği için uyarı vermeyiz.
+            $tokenlar = @token_get_all($kaynak);
+            if (!$tokenlar) { continue; }
+            $n = count($tokenlar);
+            for ($i = 0; $i < $n; $i++) {
+                $t = $tokenlar[$i];
+                if (!is_array($t) || $t[0] !== T_STRING) { continue; }
+                $ad = strtolower($t[1]);
+                if (!in_array($ad, $riskli, true)) { continue; }
+                // Bir ÇAĞRI mı? (adından sonra '(' gelmeli)
+                $j = $i + 1;
+                while ($j < $n && is_array($tokenlar[$j]) && $tokenlar[$j][0] === T_WHITESPACE) { $j++; }
+                if ($j >= $n || $tokenlar[$j] !== '(') { continue; }
+                // Metot/sabit erişimi ya da tanım değil mi?
+                $k = $i - 1;
+                while ($k >= 0 && is_array($tokenlar[$k]) && $tokenlar[$k][0] === T_WHITESPACE) { $k--; }
+                if ($k >= 0 && is_array($tokenlar[$k])
+                    && in_array($tokenlar[$k][0], [T_OBJECT_OPERATOR, T_DOUBLE_COLON, T_FUNCTION], true)) { continue; }
+                // Aynı dosyada function_exists('ad') koruması var mı?
+                if (preg_match('/function_exists\s*\(\s*[\x27"]' . preg_quote($ad, '/') . '[\x27"]/i', $kaynak)) { continue; }
+                $bulgu[] = str_replace(chr(92), '/', substr($dosya, strlen($root) + 1)) . ':' . $t[2] . ':' . $ad;
+            }
+        }
+        sort($bulgu);
+        echo $bulgu ? implode(',', array_unique($bulgu)) : 'TAMAM';
+        break;
+
     default:
         fwrite(STDERR, "Bilinmeyen soru: " . $soru . "\n");
         exit(1);

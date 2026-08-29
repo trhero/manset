@@ -726,8 +726,8 @@ function analytics_health_checks() {
     }
 
     /* Disk ----------------------------------------------------------------- */
-    $bos = @disk_free_space(ROOT_DIR);
-    if ($bos !== false && $bos > 0) {
+    $bos = disk_free_bytes(ROOT_DIR);
+    if ($bos !== null && $bos > 0) {
         $ton = $bos < 209715200 ? 'olumsuz' : ($bos < 1073741824 ? 'uyari' : 'olumlu');
         $out[] = ['ad' => 'Boş disk', 'deger' => analytics_human_size((int)$bos), 'ton' => $ton,
                   'not' => 'Disk dolduğunda görsel yüklemesi ve yedek alma sessizce başarısız olur.'];

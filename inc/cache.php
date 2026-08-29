@@ -15,7 +15,8 @@
  *      · Yazma tek dosyaya yapılır, dolayısıyla tek rename() ile hem içerik hem
  *        üstveri atomik olarak yerine oturur. İki dosyada içerik/üstveri çiftinin
  *        yarıda kalma (yetim .meta) ihtimali vardır.
- *      · HIT yolunda tek fopen() yeter: fgets() üstveriyi, fpassthru() gövdeyi verir.
+ *      · HIT yolunda tek fopen() yeter: fgets() üstveriyi, fread() döngüsü gövdeyi
+ *        verir (fpassthru DEĞİL — bkz. cache_serve() sonundaki not).
  *        İki dosyalı tasarımda her istek iki stat + iki açma demektir.
  *      · Kapsam bazlı temizlikte yalnız ilk satır okunur (birkaç yüz bayt).
  *    Bedeli: gövde diskte 1 satır kaydırılmış durur; fpassthru offset ile başlar.
@@ -681,7 +682,22 @@ function cache_serve($key) {
     }
 
     if (!headers_sent()) { header('Content-Length: ' . $len); }
-    fpassthru($fh);
+
+    // NEDEN fpassthru() DEĞİL:
+    // Paylaşımlı hostinglerin bir kısmı `fpassthru`yu `disable_functions` ile
+    // KAPATIR (readfile/passthru ailesiyle birlikte toptan kapatılır). Kapalı
+    // olduğunda bu satır ölümcül hata verir ve sonuç şuydu: sayfanın İLK
+    // ziyareti çalışır (önbellek yazma yolu), YENİLEMESİ hata sayfası döner
+    // (önbellek okuma yolu). Yani sitenin çoğu sayfası ikinci istekte ölür.
+    // Bir kullanıcı bunu canlı hostingde bildirdi.
+    //
+    // fread/echo döngüsü aynı işi yapar, hiçbir yerde kapatılmaz ve belleği de
+    // aynı şekilde korur (dosya tek seferde belleğe alınmaz).
+    while (!feof($fh)) {
+        $parca = fread($fh, 65536);
+        if ($parca === false || $parca === '') { break; }
+        echo $parca;
+    }
     fclose($fh);
     return true;
 }

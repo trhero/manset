@@ -7,7 +7,7 @@
 
 if (defined('MANSET_BOOTSTRAPPED')) { return; }
 define('MANSET_BOOTSTRAPPED', true);
-define('MANSET_VERSION', '1.4.1');
+define('MANSET_VERSION', '1.4.2');
 define('ROOT_DIR', dirname(__DIR__));
 define('INC_DIR', ROOT_DIR . '/inc');
 define('DB_DIR', ROOT_DIR . '/db');
@@ -83,6 +83,48 @@ function log_scrub($text) {
     $yerine = ['[SIR]', '[SIR]', '[SIR]', '[SIR]', '$1[SIR]', '[SIR]', '$1[SIR]$3'];
     $t = preg_replace($desen, $yerine, $t);
     return $t === null ? (string)$text : $t;
+}
+
+/**
+ * Bir dosyayı istemciye AKITARAK basar (readfile/fpassthru yerine).
+ *
+ * NEDEN VAR — GERÇEK BİR ARIZADAN DOĞDU
+ * Paylaşımlı hostinglerin bir kısmı `readfile`, `fpassthru`, `passthru`
+ * ailesini `disable_functions` ile kapatır. PHP 8'de kapatılan işlev işlev
+ * tablosundan TAMAMEN silinir; yani çağrı "Call to undefined function" ile
+ * ÖLÜMCÜL hata verir ve baştaki `@` bunu YUTMAZ (`@` uyarıyı bastırır, Error'ı
+ * değil). Canlı bir kurulumda önbellekten sunma yolu böyle öldü: sayfanın ilk
+ * ziyareti çalışıyor, YENİLENMESİ hata sayfası döndürüyordu.
+ *
+ * `fread` + `echo` her yerde vardır, aynı işi yapar ve dosyayı tek seferde
+ * belleğe almaz — 64 KB'lik parçalar hâlinde akıtır.
+ *
+ * @return bool okunabildi mi
+ */
+function file_stream_out($path) {
+    $fh = @fopen($path, 'rb');
+    if (!$fh) { return false; }
+    while (!feof($fh)) {
+        $parca = fread($fh, 65536);
+        if ($parca === false || $parca === '') { break; }
+        echo $parca;
+    }
+    fclose($fh);
+    return true;
+}
+
+/**
+ * Boş disk alanı — işlev kapalıysa "bilinmiyor".
+ *
+ * `disk_free_space` da yaygın olarak kapatılır. Eskiden `@disk_free_space()`
+ * yazılıyordu; yukarıdaki nedenle bu YETMEZ.
+ *
+ * @return float|null bayt, ya da bilinmiyorsa null
+ */
+function disk_free_bytes($dir) {
+    if (!function_exists('disk_free_space')) { return null; }
+    $b = @disk_free_space($dir);
+    return ($b === false) ? null : (float)$b;
 }
 
 function log_error($message, $context = '') {

@@ -259,7 +259,7 @@ api_register('public.health', function () {
     $cronYas = $sonCron !== '' ? max(0, (int)round(($simdi - strtotime($sonCron)) / 60)) : -1;
 
     // Disk ve veritabanı boyutu
-    $bosDisk = @disk_free_space(ROOT_DIR);
+    $bosDisk = disk_free_bytes(ROOT_DIR);
     $dbBoyut = 0;
     if (db_driver() === 'sqlite') {
         $yol = (string)cfg('db_path', DB_DIR . '/manset.sqlite');
@@ -276,7 +276,7 @@ api_register('public.health', function () {
         'kurulu_surum'   => setting('installed_version', ''),
         'goc_bekliyor'   => function_exists('upgrade_pending') ? (upgrade_pending() ? 1 : 0) : 0,
         'cron_yas_dk'    => $cronYas,
-        'disk_bos_mb'    => $bosDisk === false ? -1 : (int)round($bosDisk / 1048576),
+        'disk_bos_mb'    => $bosDisk === null ? -1 : (int)round($bosDisk / 1048576),
         'db_mb'          => (int)round($dbBoyut / 1048576),
         'bekleyen_haber' => $sayac('SELECT COUNT(*) FROM posts WHERE status = \'pending\''),
         'bekleyen_yorum' => $sayac('SELECT COUNT(*) FROM comments WHERE status = \'pending\''),

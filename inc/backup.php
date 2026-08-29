@@ -376,7 +376,7 @@ function backup_stream($path) {
         header('Cache-Control: private, no-store');
         header('Pragma: no-cache');
     }
-    readfile($abs);
+    file_stream_out($abs);
 }
 
 // ============================================================ geri yükleme

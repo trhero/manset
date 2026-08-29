@@ -4,6 +4,28 @@ Bu proje [Anlamsal Sürümleme](https://semver.org/lang/tr/) kurallarını izler
 
 ## [Yayımlanmadı]
 
+## [1.4.2]
+
+### Düzeltmeler — paylaşımlı hostingte kapatılan işlevler
+- **Önbellekten sunulan her sayfa ikinci istekte ölüyordu.** `cache_serve()`
+  gövdeyi `fpassthru()` ile basıyordu; bazı paylaşımlı hostingler bu işlevi
+  `disable_functions` ile kapatır. PHP 8'de kapatılan işlev işlev tablosundan
+  TAMAMEN silinir, yani çağrı `Call to undefined function` ile ölümcül hata
+  verir. Belirti sinsiydi: sayfanın **ilk ziyareti çalışıyor** (önbelleğe yazma
+  yolu), **yenilenmesi hata sayfası döndürüyordu** (önbellekten okuma yolu).
+  Bir kullanıcı bunu canlı hostingde bildirdi. `fread` döngüsüne geçildi.
+- Aynı sınıftaki diğer çağrılar da kapatıldı: dekont, günlük ve yedek indirme
+  yollarındaki `readfile()` çağrıları ortak `file_stream_out()` yardımcısına
+  taşındı; `disk_free_space()` çağrıları `disk_free_bytes()` üzerinden korunuyor
+  ("bilinmiyor" artık geçerli bir cevap); `cron.php` içindeki iki
+  `set_time_limit()` çağrısı korumaya alındı.
+- **`@` bir koruma değildir.** Kod dört yerde `@disk_free_space()` yazıyordu;
+  `@` uyarıyı bastırır, Error'ı yutmaz. Bu yanlış güven artık kodda yok.
+- Yeni `probe kapali_islev`: web isteğinde çalışan kodu tarar ve kapatılabilir
+  işlevlerin korumasız çağrılarını bulur (yorum ve dize içindekileri ayıklamak
+  için `token_get_all` kullanır). Yazılır yazılmaz `cron.php`'deki iki gerçek
+  çağrıyı buldu. e2e kapısına bağlandı.
+
 ## [1.4.1]
 
 ### Düzeltmeler
