@@ -4,6 +4,24 @@ Bu proje [Anlamsal Sürümleme](https://semver.org/lang/tr/) kurallarını izler
 
 ## [Yayımlanmadı]
 
+## [1.4.3]
+
+### Düzeltmeler — temiz adresler kırıkken sessiz kalınıyordu
+- **Demo paketi artık temiz adreslerle GELMİYOR.** `dev-install.php`
+  `use_rewrite=1` yazıyordu; bu, paketi üreten makinede ÖLÇÜLMÜŞ bir doğrudur
+  ama pakete konduğunda hedef sunucu hakkında bir VARSAYIMA dönüşür. Varsayım
+  tutmadığında sonuç şu: ana sayfa açılır, tıklanan her bağlantı sunucunun 404
+  sayfasını verir. Bir kullanıcının hostinginde tam olarak bu oldu — kök
+  `.htaccess` sunucuya yüklenmemişti (nokta ile başlayan dosyalar FTP ve dosya
+  yöneticilerinde gizlidir, taşımada en sık unutulan dosya budur). Demo artık
+  `?r=…` adresleriyle gelir; bunlar mod_rewrite olmadan her sunucuda çalışır.
+- **Kontrol ekranındaki "Temiz (SEF) adresler" denetimi artık ayarı değil
+  GERÇEĞİ sorar.** Eskiden `use_rewrite` açık görünce "olumlu" diyordu — yani
+  sitenin tamamı 404 verirken panel "tamam" raporluyordu. Artık kök
+  `.htaccess` içinde rewrite kuralı var mı diye bakar ve yoksa ne yapılacağını
+  iki seçenekle anlatır. nginx/IIS'te (`.htaccess` okunmayan sunucular) bu
+  uyarı verilmez, aksi hâlde yanlış alarm olurdu.
+
 ## [1.4.2]
 
 ### Düzeltmeler — paylaşımlı hostingte kapatılan işlevler

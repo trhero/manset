@@ -317,14 +317,44 @@ $maddeler[] = kontrol_madde(
     admin_url('settings'), 'Ayarlar →');
 
 /* 3) Temiz adres ---------------------------------------------------------- */
-$maddeler[] = kontrol_madde(
-    'Temiz (SEF) adresler',
-    sef_enabled() ? 'olumlu' : 'uyari',
-    sef_enabled() ? 'açık' : 'kapalı — adresler ?r=… biçiminde',
-    'Kapalıyken adresler okunabilir olmaz ve paylaşıldığında güven vermez. '
-  . 'Sunucunuzda mod_rewrite yoksa bu bilinçli bir tercih olabilir; Ayarlar ekranındaki '
-  . 'sonda düğmesi durumu yeniden sınar.',
-    admin_url('settings'), 'Ayarlar →');
+// BU DENETİM AYARI DEĞİL, GERÇEĞİ SORAR.
+// Eskiden yalnız `use_rewrite` ayarına bakıyordu ve "açık" görünce OLUMLU
+// diyordu. Oysa en tehlikeli hâl tam olarak budur: ayar açık ama sunucuda
+// rewrite çalışmıyorsa ana sayfa açılır, İÇERİDEKİ HER BAĞLANTI 404 verir ve
+// panel "tamam" der. Canlı bir kurulumda tam olarak bu oldu — kök .htaccess
+// sunucuya yüklenmemişti (nokta ile başlayan dosyalar FTP'de gizlidir).
+$htKok      = ROOT_DIR . '/.htaccess';
+$htIcerik   = is_file($htKok) ? (string)@file_get_contents($htKok) : '';
+$htRewrite  = $htIcerik !== '' && strpos($htIcerik, 'RewriteRule') !== false;
+$sunucuAdi  = strtolower((string)(isset($_SERVER['SERVER_SOFTWARE']) ? $_SERVER['SERVER_SOFTWARE'] : ''));
+// nginx/IIS .htaccess OKUMAZ; orada dosyanın yokluğu bir arıza değildir.
+$htaccessliMi = ($sunucuAdi === '') ? null
+              : (strpos($sunucuAdi, 'apache') !== false || strpos($sunucuAdi, 'litespeed') !== false);
+
+if (sef_enabled() && !$htRewrite && $htaccessliMi !== false) {
+    $maddeler[] = kontrol_madde(
+        'Temiz (SEF) adresler',
+        'olumsuz',
+        is_file($htKok) ? 'açık — ama kök .htaccess içinde rewrite kuralı yok'
+                        : 'açık — ama kök .htaccess sunucuda YOK',
+        'Temiz adresler açık, yani bağlantılar /haber/… biçiminde üretiliyor; ama bu '
+      . 'adresleri Manşet’e yönlendirecek kural sunucuda bulunamadı. Bu durumda ana sayfa '
+      . 'açılır, TIKLANAN HER BAĞLANTI sunucunun 404 sayfasını verir. '
+      . 'Nokta ile başlayan dosyalar FTP ve dosya yöneticilerinde GİZLİDİR; site '
+      . 'taşınırken en sık unutulan dosya budur. İki çözümden biri: kök .htaccess '
+      . 'dosyasını sunucuya yükleyin, ya da Ayarlar’dan temiz adresleri kapatın '
+      . '(adresler ?r=… olur, her sunucuda çalışır).',
+        admin_url('settings'), 'Ayarlar →');
+} else {
+    $maddeler[] = kontrol_madde(
+        'Temiz (SEF) adresler',
+        sef_enabled() ? 'olumlu' : 'uyari',
+        sef_enabled() ? 'açık' : 'kapalı — adresler ?r=… biçiminde',
+        'Kapalıyken adresler okunabilir olmaz ve paylaşıldığında güven vermez. '
+      . 'Sunucunuzda mod_rewrite yoksa bu bilinçli bir tercih olabilir; Ayarlar ekranındaki '
+      . 'sonda düğmesi durumu yeniden sınar.',
+        admin_url('settings'), 'Ayarlar →');
+}
 
 /* 4) robots.txt ----------------------------------------------------------- */
 $robots = function_exists('seo_robots_txt') ? seo_robots_txt() : '';

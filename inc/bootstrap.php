@@ -7,7 +7,7 @@
 
 if (defined('MANSET_BOOTSTRAPPED')) { return; }
 define('MANSET_BOOTSTRAPPED', true);
-define('MANSET_VERSION', '1.4.2');
+define('MANSET_VERSION', '1.4.3');
 define('ROOT_DIR', dirname(__DIR__));
 define('INC_DIR', ROOT_DIR . '/inc');
 define('DB_DIR', ROOT_DIR . '/db');

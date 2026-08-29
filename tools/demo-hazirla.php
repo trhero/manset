@@ -91,6 +91,32 @@ echo "Demo içeriği yükleniyor…\n";
 exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($gecici . '/tests/demo-seed.php') . ' 2>&1', $tohumCikti, $kod2);
 if ($kod2 !== 0) { fwrite(STDERR, "Demo tohumu başarısız.\n"); exit(1); }
 
+// TEMİZ ADRESLERİ KAPAT — demo BİLİNMEYEN bir sunucuya açılacak.
+//
+// `dev-install.php` `use_rewrite=1` yazar; bu, BU makinede ölçülmüş bir
+// doğrudur ve pakete konduğunda hedef sunucu hakkında bir VARSAYIMA dönüşür.
+// Varsayım tuttuğunda kimse fark etmez, tutmadığında sonuç şudur: ana sayfa
+// açılır, tıklanan her bağlantı sunucunun 404 sayfasını verir. Bir kullanıcının
+// hostinginde tam olarak bu oldu (kök .htaccess yüklenmemişti).
+//
+// `?r=…` adresleri mod_rewrite olmadan da HER sunucuda çalışır. Demoyu kuran
+// kişi isterse Ayarlar'dan temiz adresleri açar; oradaki sonda gerçekten
+// çalışıp çalışmadığını ÖLÇER. Çirkin ama çalışan, güzel ama kırık'tan iyidir.
+$sefBetik = $gecici . '/.sef-kapat.php';
+file_put_contents($sefBetik,
+    "<?php
+require __DIR__ . '/inc/bootstrap.php';
+setting_set('use_rewrite', '0');
+");
+exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($sefBetik) . ' 2>&1', $sefCikti, $kod3);
+@unlink($sefBetik);
+if ($kod3 !== 0) { fwrite(STDERR, "use_rewrite kapatilamadi:
+" . implode("
+", $sefCikti) . "
+"); exit(1); }
+echo "  temiz adresler KAPALI (demo bilinmeyen sunucuya kurulacak)
+";
+
 // config.php'yi demo için yeniden yaz: göreli veritabanı yolu + demo_mode.
 $cfgYol = $gecici . '/config.php';
 $cfg = require $cfgYol;
