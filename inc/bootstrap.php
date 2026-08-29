@@ -7,7 +7,7 @@
 
 if (defined('MANSET_BOOTSTRAPPED')) { return; }
 define('MANSET_BOOTSTRAPPED', true);
-define('MANSET_VERSION', '1.4.0');
+define('MANSET_VERSION', '1.4.1');
 define('ROOT_DIR', dirname(__DIR__));
 define('INC_DIR', ROOT_DIR . '/inc');
 define('DB_DIR', ROOT_DIR . '/db');
@@ -789,7 +789,16 @@ function rate_limit_clear($bucket) {
 function manset_exception_handler($e) {
     $mesaj = ($e instanceof Throwable) ? $e->getMessage() : 'bilinmeyen';
     $yer   = ($e instanceof Throwable) ? (basename($e->getFile()) . ':' . $e->getLine()) : '';
-    log_error('Yakalanmamış istisna: ' . $mesaj . ' @ ' . $yer);
+
+    // OLAY NUMARASI. Ziyaretçiye gösterilen mesaj ayrıntı SIZDIRMAZ - bu
+    // doğrudur - ama ziyaretçi ile günlük satırı arasında hiçbir bağ da
+    // bırakmıyordu: "hata alıyorum" diyen okurun hangi satırı kastettiği
+    // günlükte bulunamıyordu. Numara yalnız bir EŞLEŞTİRME anahtarıdır;
+    // içeriğe dair hiçbir şey söylemez, tahmin edilmesi de bir işe yaramaz.
+    try { $ref = strtoupper(bin2hex(random_bytes(3))); }
+    catch (Throwable $x) { $ref = strtoupper(substr(md5($yer . microtime()), 0, 6)); }
+
+    log_error('Yakalanmamış istisna [' . $ref . ']: ' . $mesaj . ' @ ' . $yer);
 
     if (headers_sent()) {
         // Çıktı başlamışsa durum kodu değiştirilemez: ziyaretçi YARIM bir sayfa
@@ -798,21 +807,23 @@ function manset_exception_handler($e) {
         // yanlış içerik (ör. eksik düzeltme metni) doğru gibi okunur.
         echo "\n<!-- manset: istek yarıda kesildi -->\n"
            . '<p style="font:14px system-ui;padding:16px;border-top:2px solid #b91c1c;'
-           . 'color:#b91c1c">Bu sayfa bir hata yüzünden eksik kaldı. Lütfen yenileyin.</p>';
+           . 'color:#b91c1c">Bu sayfa bir hata yüzünden eksik kaldı. Lütfen yenileyin. '
+           . '<span style="opacity:.7">(Olay no: ' . $ref . ')</span></p>';
         return;
     }
     http_response_code(500);
 
     if (function_exists('is_json_request') && is_json_request()) {
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['ok' => false, 'error' => 'Sunucu hatası. Lütfen tekrar deneyin.'],
+        echo json_encode(['ok' => false, 'error' => 'Sunucu hatası. Lütfen tekrar deneyin.', 'ref' => $ref],
                          JSON_UNESCAPED_UNICODE);
         return;
     }
     header('Content-Type: text/html; charset=utf-8');
     echo '<!doctype html><meta charset="utf-8"><title>Sunucu hatası</title>'
        . '<p style="font:16px system-ui;padding:40px">Beklenmeyen bir hata oluştu. '
-       . 'Ayrıntı site yöneticisinin hata günlüğüne yazıldı.</p>';
+       . 'Ayrıntı site yöneticisinin hata günlüğüne yazıldı.<br>'
+       . '<small style="opacity:.7">Olay no: ' . $ref . ' — yöneticiye bildirirken bu numarayı verin.</small></p>';
 }
 set_exception_handler('manset_exception_handler');
 

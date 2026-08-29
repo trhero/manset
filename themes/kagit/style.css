@@ -486,6 +486,10 @@ picture{display:block}
   padding:11px 18px;display:flex;gap:14px;align-items:center;justify-content:center;
   flex-wrap:wrap;z-index:50;font-family:var(--yazi-etiket);font-size:13px;
 }
+/* `hidden` niteligi UA `display:none` verir ama yukaridaki `.cookie-bar`
+   kurali display:flex ile onu EZER: cubuk JS calismadan once gorunur ve
+   "Tamam"a basildiginda `bar.hidden = true` HICBIR SEY yapmaz. */
+.cookie-bar[hidden]{display:none}
 .cookie-bar p{margin:0}
 .cookie-bar a{text-decoration:underline}
 .cookie-bar button{background:var(--renk-ana);color:var(--renk-zemin);border:0;padding:7px 16px;cursor:pointer;font:inherit;font-weight:700}

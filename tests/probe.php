@@ -439,6 +439,32 @@ switch ($soru) {
         echo implode(',', array_merge($hayali, $acik));
         break;
 
+    case 'cerez_kapat':
+        // ÇEREZ ÇUBUĞU GERÇEKTEN KAPANIYOR MU?
+        //
+        // Çubuk `hidden` niteliğiyle basılır; JS onu gösterir, "Tamam"
+        // `bar.hidden = true` ile geri gizler. Ama tema CSS'i `.cookie-bar`
+        // için `display:flex` verirse UA'nın `[hidden] { display:none }`
+        // kuralını EZER — çubuk JS'ten önce görünür ve "Tamam" hiçbir şey
+        // yapmaz. Kullanıcı bunu bildirdi; beş temanın BEŞİNDE de böyleydi.
+        //
+        // Kural: `display` veren her `.cookie-bar` kuralının yanında
+        // `.cookie-bar[hidden]` kapatıcısı bulunmalıdır.
+        $eksik = [];
+        foreach (glob($root . '/themes/*/style.css') as $css) {
+            $metin = (string)file_get_contents($css);
+            if (strpos($metin, '.cookie-bar') === false) { continue; }
+            // Yalnız çubuğun KENDİ kuralına bak: `.cookie-bar p` gibi
+            // alt seçiciler ve @media içindeki toplu gizlemeler sayılmaz.
+            if (!preg_match('/\.cookie-bar\s*\{[^}]*display\s*:/', $metin)) { continue; }
+            if (!preg_match('/\.cookie-bar\[hidden\]\s*\{[^}]*display\s*:\s*none/', $metin)) {
+                $eksik[] = basename(dirname($css));
+            }
+        }
+        sort($eksik);
+        echo $eksik ? implode(',', $eksik) : 'TAMAM';
+        break;
+
     default:
         fwrite(STDERR, "Bilinmeyen soru: " . $soru . "\n");
         exit(1);

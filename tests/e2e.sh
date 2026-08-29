@@ -1845,6 +1845,14 @@ if [ "$(probe srcset_gate)" = "TAMAM" ]; then
   ok "srcset şema denetimi çalışıyor (desen geçerli)"
 else bad "SRCSET KAPISI ÖLÜ" "PCRE deseni derlenmiyor"; fi
 
+# --- Çerez çubuğu "Tamam" ile gerçekten kapanabilmeli
+# Tema CSS'i `.cookie-bar{display:flex}` verip `[hidden]` kapatıcısını
+# unutursa çubuk JS'ten önce görünür ve düğme hiçbir şey yapmaz.
+CB="$(probe cerez_kapat)"
+if [ "${CB}" = "TAMAM" ]; then
+  ok "çerez çubuğu her temada gizlenebiliyor"
+else bad "ÇEREZ ÇUBUĞU KAPANMIYOR" "[hidden] kuralı eksik tema(lar): ${CB}"; fi
+
 # --- tests/dev-install.php web'den çalıştırılamamalı
 KOD3="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/tests/dev-install.php" 2>/dev/null)"
 if [ "${KOD3}" = "403" ] || [ "${KOD3}" = "404" ]; then
@@ -2002,7 +2010,8 @@ else ok "imzasız webhook reddedildi (HTTP ${HTTP_CODE})"; fi
 # yuruye cikarilabiliyordu). Her yeni "icerikten parca goster" ozelligi bu kapiyi
 # yeniden acma riski tasir; sonda kilitli bir haber uydurup metin ureten yollari
 # ANONIM olarak cagirir.
-SIZSONDA="$("${PHP}" "${SCRIPT_DIR}/probe.php" "${RUN}" paywall_leak 2>&1 | tr -d '')"
+SIZSONDA="$("${PHP}" "${SCRIPT_DIR}/probe.php" "${RUN}" paywall_leak 2>&1 | tr -d '
+')"
 if [ -z "${SIZSONDA}" ]; then ok "kilitli govde hicbir metin yolundan sizmiyor"
 else bad "kilitli govde SIZIYOR" "sizan yollar: ${SIZSONDA}"; fi
 

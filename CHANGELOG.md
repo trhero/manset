@@ -4,6 +4,22 @@ Bu proje [Anlamsal Sürümleme](https://semver.org/lang/tr/) kurallarını izler
 
 ## [Yayımlanmadı]
 
+## [1.4.1]
+
+### Düzeltmeler
+- **Çerez bildirimi "Tamam" ile kapanmıyordu — beş temanın beşinde de.**
+  Çubuk `hidden` niteliğiyle basılıyor, JS onu gösterip düğmeye basılınca geri
+  gizliyordu; ama tema CSS'i `.cookie-bar{display:flex}` diyerek tarayıcının
+  `[hidden]` kuralını eziyordu. Sonuç: çubuk JS çalışmadan önce de görünüyor ve
+  düğme hiçbir şey yapmıyordu. Her temaya `.cookie-bar[hidden]{display:none}`
+  eklendi; `probe cerez_kapat` ve e2e adımı bunu bir daha sessizce kaybetmiyor.
+
+### Hata bildirimi
+- Genel hata sayfası artık bir **olay numarası** gösteriyor ve aynı numara hata
+  günlüğüne yazılıyor. Eskiden ziyaretçinin gördüğü mesaj ile günlük satırı
+  arasında hiçbir bağ yoktu; "hata alıyorum" diyen okurun hangi olaydan söz
+  ettiği bulunamıyordu. JSON yanıtlarında `ref` alanı olarak döner.
+
 ## [1.4.0]
 
 ### Yapay zekâ sağlayıcıları
